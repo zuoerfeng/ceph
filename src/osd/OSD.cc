@@ -4960,12 +4960,12 @@ void OSD::defer_recovery(PG *pg)
 // =========================================================
 // OPS
 
-void OSDService::reply_op_error(OpRequestRef op, int err)
+void OSDService::reply_op_error(OpRequestRef op, int err, int forward_to)
 {
-  reply_op_error(op, err, eversion_t());
+  reply_op_error(op, err, eversion_t(), forward_to);
 }
 
-void OSDService::reply_op_error(OpRequestRef op, int err, eversion_t v)
+void OSDService::reply_op_error(OpRequestRef op, int err, eversion_t v, int forward_to)
 {
   MOSDOp *m = (MOSDOp*)op->request;
   assert(m->get_header().type == CEPH_MSG_OSD_OP);
@@ -4973,8 +4973,10 @@ void OSDService::reply_op_error(OpRequestRef op, int err, eversion_t v)
   flags = m->get_flags() & (CEPH_OSD_FLAG_ACK|CEPH_OSD_FLAG_ONDISK);
 
   MOSDOpReply *reply = new MOSDOpReply(m, err, osdmap->get_epoch(), flags);
-  Messenger *msgr = client_messenger;
+  reply->set_forward_to(forward_to);
   reply->set_version(v);
+
+  Messenger *msgr = client_messenger;
   if (m->get_source().is_osd())
     msgr = cluster_messenger;
   msgr->send_message(reply, m->get_connection());
@@ -5074,7 +5076,9 @@ void OSD::handle_op(OpRequestRef op)
   if (!pg) {
     dout(7) << "hit non-existent pg " << pgid << dendl;
 
-    if (osdmap->get_pg_acting_role(pgid, whoami) >= 0) {
+    vector<int> acting;
+    osdmap->pg_to_acting_osds(pgid, acting);
+    if (osdmap->calc_pg_role(whoami, acting, 0) >= 0) {
       dout(7) << "we are valid target for op, waiting" << dendl;
       waiting_for_pg[pgid].push_back(op);
       op->mark_delayed();
@@ -5100,13 +5104,13 @@ void OSD::handle_op(OpRequestRef op)
       dout(7) << "we are invalid target" << dendl;
       clog.warn() << m->get_source_inst() << " misdirected " << m->get_reqid()
 		  << " pg " << m->get_pg()
-		  << " to osd." << whoami
+		  << " to osd." << whoami << " not " << acting
 		  << " in e" << osdmap->get_epoch()
 		  << ", client e" << m->get_map_epoch()
 		  << " pg " << pgid
 		  << " features " << m->get_connection()->get_features()
 		  << "\n";
-      service.reply_op_error(op, -ENXIO);
+      service.reply_op_error(op, -ENXIO, acting.size() ? acting[0] : -1);
     }
     return;
   } else if (!op_has_sufficient_caps(pg, m)) {

@@ -234,8 +234,8 @@ public:
   void dec_scrubs_pending();
   void dec_scrubs_active();
 
-  void reply_op_error(OpRequestRef op, int err);
-  void reply_op_error(OpRequestRef op, int err, eversion_t v);
+  void reply_op_error(OpRequestRef op, int err, int forward_to=-1);
+  void reply_op_error(OpRequestRef op, int err, eversion_t v, int forward_to=-1);
   void handle_misdirected_op(PG *pg, OpRequestRef op);
 
   // -- Watch --

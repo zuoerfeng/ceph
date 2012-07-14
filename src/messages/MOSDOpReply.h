@@ -31,7 +31,7 @@
 
 class MOSDOpReply : public Message {
 
-  static const int HEAD_VERSION = 4;
+  static const int HEAD_VERSION = 5;
   static const int COMPAT_VERSION = 2;
 
   object_t oid;
@@ -42,6 +42,7 @@ class MOSDOpReply : public Message {
   eversion_t reassert_version;
   epoch_t osdmap_epoch;
   int32_t retry_attempt;
+  int32_t forward_to;
 
 public:
   object_t get_oid() const { return oid; }
@@ -59,6 +60,8 @@ public:
 
   void set_result(int r) { result = r; }
   void set_version(eversion_t v) { reassert_version = v; }
+
+  void set_forward_to(int o) { forward_to = o; }
 
   void add_flags(int f) { flags |= f; }
 
@@ -93,7 +96,8 @@ public:
   MOSDOpReply()
     : Message(CEPH_MSG_OSD_OPREPLY, HEAD_VERSION, COMPAT_VERSION) { }
   MOSDOpReply(MOSDOp *req, int r, epoch_t e, int acktype)
-    : Message(CEPH_MSG_OSD_OPREPLY, HEAD_VERSION, COMPAT_VERSION) {
+    : Message(CEPH_MSG_OSD_OPREPLY, HEAD_VERSION, COMPAT_VERSION),
+      forward_to(-1) {
     set_tid(req->get_tid());
     ops = req->ops;
     result = r;
@@ -149,6 +153,8 @@ public:
 
       for (unsigned i = 0; i < num_ops; i++)
 	::encode(ops[i].rval, payload);
+
+      ::encode(forward_to, payload);
     }
   }
   virtual void decode_payload() {
@@ -192,6 +198,12 @@ public:
 
 	OSDOp::split_osd_op_vector_out_data(ops, data);
       }
+
+      if (header.version >= 5) {
+	::decode(forward_to, p);
+      } else {
+	forward_to = -1;
+      }
     }
   }
 
@@ -208,6 +220,8 @@ public:
       else
 	out << " ack";
     }
+    if (forward_to >= 0)
+      out << " fwd_to " << forward_to;
     out << " = " << get_result();
     if (get_result() < 0) {
       char buf[80];

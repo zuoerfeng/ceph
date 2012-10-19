@@ -275,7 +275,7 @@ void proto_reg_handoff_ceph(void)
 		data_handle = find_dissector("data");
 		ceph_handle = create_dissector_handle(dissect_ceph, proto_ceph);
 		for (port = global_ceph_min_port; port <= global_ceph_max_port; port++)
-			dissector_add("tcp.port", port, ceph_handle);
+			dissector_add_uint("tcp.port", port, ceph_handle);
 	}
 
 }

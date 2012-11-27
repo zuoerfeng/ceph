@@ -5765,13 +5765,21 @@ int Client::_write(Fh *f, int64_t offset, uint64_t size, const char *buf)
     ldout(cct, 7) << "wrote to " << totalwritten+offset << ", leaving file size at " << in->size << dendl;
   }
 
-  // mtime
   utime_t curtime = ceph_clock_now(cct);
+  // mtime
   if (in->mtime > curtime) {
     // can't go backwards, increment mtime by 1 nanosec
     in->mtime += 0.000000001;
   } else {
     in->mtime = curtime;
+  }
+
+  // ctime
+  if (in->ctime > curtime) {
+    // can't go backwards, increment mtime by 1 nanosec
+    in->ctime += 0.000000001;
+  } else {
+    in->ctime = curtime;
   }
   mark_caps_dirty(in, CEPH_CAP_FILE_WR);
 

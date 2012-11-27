@@ -5766,7 +5766,13 @@ int Client::_write(Fh *f, int64_t offset, uint64_t size, const char *buf)
   }
 
   // mtime
-  in->mtime = ceph_clock_now(cct);
+  utime_t curtime = ceph_clock_now(cct);
+  if (in->mtime > curtime) {
+    // can't go backwards, increment mtime by 1 nanosec
+    in->mtime += 0.000000001;
+  } else {
+    in->mtime = curtime;
+  }
   mark_caps_dirty(in, CEPH_CAP_FILE_WR);
 
   put_cap_ref(in, CEPH_CAP_FILE_WR);

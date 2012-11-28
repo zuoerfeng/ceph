@@ -54,4 +54,7 @@ TEST(LibCephFS, ReaddirRCB) {
   ASSERT_LE(0, ceph_opendir(cmount, c_dir, &dirp));
   ASSERT_EQ(5, ceph_getdnames(cmount, dirp, buf, 6));
   ASSERT_EQ(4, ceph_getdnames(cmount, dirp, buf, 6));
+  ASSERT_LE(0, ceph_closedir(cmount, dirp));
+
+  ceph_shutdown(cmount);
 }

@@ -53,6 +53,7 @@ enum {
   l_osdc_op_laggy,
   l_osdc_op_send,
   l_osdc_op_send_bytes,
+  l_osdc_op_send_replica,
   l_osdc_op_resend,
   l_osdc_op_ack,
   l_osdc_op_commit,
@@ -132,6 +133,7 @@ void Objecter::init_unlocked()
     pcb.add_u64(l_osdc_op_laggy, "op_laggy");
     pcb.add_u64_counter(l_osdc_op_send, "op_send");
     pcb.add_u64_counter(l_osdc_op_send_bytes, "op_send_bytes");
+    pcb.add_u64_counter(l_osdc_op_send_replica, "op_send_replica");
     pcb.add_u64_counter(l_osdc_op_resend, "op_resend");
     pcb.add_u64_counter(l_osdc_op_ack, "op_ack");
     pcb.add_u64_counter(l_osdc_op_commit, "op_commit");
@@ -1275,6 +1277,8 @@ void Objecter::send_op(Op *op)
 
   logger->inc(l_osdc_op_send);
   logger->inc(l_osdc_op_send_bytes, m->get_data().length());
+  if (op->used_replica)
+    logger->inc(l_osdc_op_send_replica);
 
   messenger->send_message(m, op->session->con);
 }

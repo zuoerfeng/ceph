@@ -24,6 +24,8 @@
 #include <sstream>
 #include <string>
 #include <algorithm>
+#include "json_spirit/json_spirit.h"
+#include "tools/tools.h"
 
 /*
  * The bool parameter to control localized reads isn't used in
@@ -52,7 +54,7 @@ class ConfiguredMountTest : public ::testing::TestWithParam<bool> {
 
 class MountedTest : public ConfiguredMountTest {
 
-  std::string root;
+  std::string root, asok;
 
   protected:
     virtual void SetUp() {
@@ -70,6 +72,10 @@ class MountedTest : public ConfiguredMountTest {
       root = unique_path;
       root.insert(0, 1, '/');
 
+      /* Make /tmp path for client admin socket */
+      asok = unique_path;
+      asok.insert(0, "/tmp/");
+
       /* Now mount */
       ConfiguredMountTest::SetUp();
       Mount();
@@ -85,6 +91,21 @@ class MountedTest : public ConfiguredMountTest {
       if (deep)
         ConfiguredMountTest::RefreshMount();
       Mount();
+    }
+
+    uint64_t get_objecter_replica_ops() {
+      /* Grab and parse the perf data if we haven't already */
+      std::stringstream ss;
+      ceph_tool_do_admin_socket(asok, "perf dump", ss);
+      std::string perfdump = ss.str();
+
+      json_spirit::mValue perfval;
+      json_spirit::read(perfdump, perfval);
+
+      json_spirit::mValue objecterVal = perfval.get_obj().find("objecter")->second;
+      json_spirit::mValue replicaVal = objecterVal.get_obj().find("op_send_replica")->second;
+
+      return replicaVal.get_uint64();
     }
 
   private:
@@ -104,6 +125,9 @@ class MountedTest : public ConfiguredMountTest {
       /* Create completely fresh mount context */
       ASSERT_EQ(ceph_unmount(cmount), 0);
       ConfiguredMountTest::RefreshMount();
+
+      /* Setup admin socket */
+      ASSERT_EQ(ceph_conf_set(cmount, "admin_socket", asok.c_str()), 0);
 
       /* Mount with new root directory */
       ASSERT_EQ(ceph_mount(cmount, root.c_str()), 0);

@@ -33,6 +33,7 @@
 #include "common/safe_io.h"
 #include "common/config.h"
 #include "tools/common.h"
+#include "tools/tools.h"
 
 #include "include/compat.h"
 #include "include/assert.h"
@@ -199,64 +200,6 @@ static int get_indata(const char *in_file, bufferlist &indata)
   return 0;
 }
 
-int do_admin_socket(string path, string cmd)
-{
-  struct sockaddr_un address;
-  int fd;
-  int r;
-  
-  fd = socket(PF_UNIX, SOCK_STREAM, 0);
-  if(fd < 0) {
-    cerr << "socket failed with " << cpp_strerror(errno) << std::endl;
-    return -1;
-  }
-
-  memset(&address, 0, sizeof(struct sockaddr_un));
-  address.sun_family = AF_UNIX;
-  snprintf(address.sun_path, UNIX_PATH_MAX, "%s", path.c_str());
-
-  if (connect(fd, (struct sockaddr *) &address, 
-	      sizeof(struct sockaddr_un)) != 0) {
-    cerr << "connect to " << path << " failed with " << cpp_strerror(errno) << std::endl;
-    return -1;
-  }
-  
-  char *buf;
-  uint32_t len;
-  r = safe_write(fd, cmd.c_str(), cmd.length() + 1);
-  if (r < 0) {
-    cerr << "write to " << path << " failed with " << cpp_strerror(errno) << std::endl;
-    goto out;
-  }
-  
-  r = safe_read(fd, &len, sizeof(len));
-  if (r < 0) {
-    cerr << "read " << len << " length from " << path << " failed with " << cpp_strerror(errno) << std::endl;
-    goto out;
-  }
-  if (r < 4) {
-    cerr << "read only got " << r << " bytes of 4 expected for response length; invalid command?" << std::endl;
-    goto out;
-  }
-  len = ntohl(len);
-
-  buf = new char[len+1];
-  r = safe_read(fd, buf, len);
-  if (r < 0) {
-    cerr << "read " << len << " bytes from " << path << " failed with " << cpp_strerror(errno) << std::endl;
-    goto out;
-  }
-  buf[len] = '\0';
-
-  cout << buf << std::endl;
-  r = 0;
-
- out:
-  ::close(fd);
-  return r;
-}
-
-
 int main(int argc, const char **argv)
 {
   std::string in_file, out_file;
@@ -279,7 +222,7 @@ int main(int argc, const char **argv)
 
   // daemon admin socket?
   if (admin_socket.length()) {
-    return do_admin_socket(admin_socket, admin_socket_cmd);
+    return ceph_tool_do_admin_socket(admin_socket, admin_socket_cmd, cout);
   }
 
   // input

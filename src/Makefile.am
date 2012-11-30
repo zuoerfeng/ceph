@@ -101,7 +101,7 @@ ceph_SOURCES = \
 	tools/ceph.cc \
 	tools/common.cc \
 	mon/PGMap.cc
-ceph_LDADD = $(LIBGLOBAL_LDA) $(LIBEDIT_LIBS)
+ceph_LDADD = libcephtools.la $(LIBGLOBAL_LDA) $(LIBEDIT_LIBS)
 ceph_CXXFLAGS = ${AM_CXXFLAGS}
 
 ceph_conf_SOURCES = ceph_conf.cc
@@ -289,6 +289,11 @@ BUILT_SOURCES =
 lib_LTLIBRARIES = 
 noinst_LTLIBRARIES = 
 noinst_LIBRARIES =
+
+# tools library
+libcephtools_la_SOURCES = tools/tools.cc
+libcephtools_la_CXXFLAGS = ${AM_CXXFLAGS}
+noinst_LTLIBRARIES += libcephtools.la
 
 # libcephfs
 libcephfs_la_SOURCES = \
@@ -1881,6 +1886,7 @@ noinst_HEADERS = \
 	rgw/rgw_user.h\
 	sample.ceph.conf\
 	tools/common.h\
+	tools/tools.h\
 	test/osd/RadosModel.h\
 	test/osd/Object.h\
 	test/osd/TestOpStat.h\

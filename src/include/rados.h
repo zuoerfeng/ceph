@@ -195,6 +195,8 @@ enum {
 
 	CEPH_OSD_OP_WATCH   = CEPH_OSD_OP_MODE_WR | CEPH_OSD_OP_TYPE_DATA | 15,
 
+	CEPH_OSD_OP_PREALLOC = CEPH_OSD_OP_MODE_WR | CEPH_OSD_OP_TYPE_DATA | 16,
+
 	/* omap */
 	CEPH_OSD_OP_OMAPGETKEYS   = CEPH_OSD_OP_MODE_RD | CEPH_OSD_OP_TYPE_DATA | 17,
 	CEPH_OSD_OP_OMAPGETVALS   = CEPH_OSD_OP_MODE_RD | CEPH_OSD_OP_TYPE_DATA | 18,
@@ -348,6 +350,11 @@ enum {
 	CEPH_OSD_CMPXATTR_MODE_U64    = 2
 };
 
+enum {
+	CEPH_OSD_PREALLOC_FLAG_ONCREATE = 1,  /* on creation only */
+	CEPH_OSD_PREALLOC_FLAG_IFEXISTS = 2,  /* if exists only */
+};
+
 /*
  * an individual object operation.  each may be accompanied by some data
  * payload
@@ -389,6 +396,10 @@ struct ceph_osd_op {
 			__le64 offset, length;
 			__le64 src_offset;
 		} __attribute__ ((packed)) clonerange;
+		struct {
+			__le64 offset, length;
+			__le64 flags;  /* CEPH_OSD_PREALLOC_FLAG_* */
+		} __attribute__ ((packed)) prealloc;
 	};
 	__le32 payload_len;
 } __attribute__ ((packed));

@@ -2351,6 +2351,17 @@ unsigned FileStore::_do_transaction(Transaction& t, uint64_t op_seq, int trans_n
       }
       break;
       
+    case Transaction::OP_FALLOCATE:
+      {
+	coll_t cid = i.get_cid();
+	hobject_t oid = i.get_oid();
+	uint64_t off = i.get_length();
+	uint64_t len = i.get_length();
+	if (_check_replay_guard(cid, oid, spos) > 0)
+	  r = _fallocate(cid, oid, off, len);
+      }
+      break;
+
     case Transaction::OP_TRIMCACHE:
       {
 	i.get_cid();
@@ -2929,6 +2940,42 @@ int FileStore::_zero(coll_t cid, const hobject_t& oid, uint64_t offset, size_t l
 
  out:
   dout(20) << "zero " << cid << "/" << oid << " " << offset << "~" << len << " = " << ret << dendl;
+  return ret;
+}
+
+int FileStore::_fallocate(coll_t cid, const hobject_t& oid, uint64_t offset, size_t len)
+{
+  dout(15) << "fallocate " << cid << "/" << oid << " " << offset << "~" << len << dendl;
+  int ret = 0;
+
+  int fd = lfn_open(cid, oid, O_RDONLY);
+  if (fd < 0) {
+    ret = -errno;
+    goto out;
+  }
+
+  // try the real way
+#ifdef CEPH_HAVE_FALLOCATE
+# if !defined(DARWIN) && !defined(__FreeBSD__)
+  ret = fallocate(fd, 0, offset, len);
+  if (ret < 0)
+    ret = -errno;
+  goto out_close;
+# endif
+#endif
+
+  // oh well; just make sure we adjust i_size
+  struct stat st;
+  ret = ::fstat(fd, &st);
+  if (ret == 0 && st.st_size < offset + len)
+    ret = ::ftruncate(fd, offset + len);
+  if (ret < 0)
+    ret = -errno;
+
+ out_close:
+  TEMP_FAILURE_RETRY(::close(fd));
+ out:
+  dout(20) << "fallocate " << cid << "/" << oid << " " << offset << "~" << len << " = " << ret << dendl;
   return ret;
 }
 

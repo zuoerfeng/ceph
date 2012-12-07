@@ -2424,6 +2424,24 @@ int ReplicatedPG::do_osd_ops(OpContext *ctx, vector<OSDOp>& ops)
 	}
       }
       break;
+
+    case CEPH_OSD_OP_PREALLOC:
+      {
+	if ((op.prealloc.flags & CEPH_OSD_PREALLOC_FLAG_ONCREATE) && obs.exists) {
+	  // obj already exists, no-op
+	} else if ((op.prealloc.flags & CEPH_OSD_PREALLOC_FLAG_IFEXISTS) && !obs.exists) {
+	  // obj does not exit, no-op
+	} else {
+	  if (!obs.exists) {
+	    ctx->delta_stats.num_objects++;
+	    t.touch(coll, soid);
+	    obs.exists = true;
+	  }
+	  t.fallocate(coll, soid, op.prealloc.offset, op.prealloc.length);
+	}
+      }
+      break;
+
     case CEPH_OSD_OP_CREATE:
       {
         int flags = le32_to_cpu(op.flags);

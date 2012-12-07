@@ -367,6 +367,7 @@ public:
   int _touch(coll_t cid, const hobject_t& oid);
   int _write(coll_t cid, const hobject_t& oid, uint64_t offset, size_t len, const bufferlist& bl);
   int _zero(coll_t cid, const hobject_t& oid, uint64_t offset, size_t len);
+  int _fallocate(coll_t cid, const hobject_t& oid, uint64_t offset, size_t len);
   int _truncate(coll_t cid, const hobject_t& oid, uint64_t size);
   int _clone(coll_t cid, const hobject_t& oldoid, const hobject_t& newoid,
 	     const SequencerPosition& spos);

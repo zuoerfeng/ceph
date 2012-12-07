@@ -2747,6 +2747,9 @@ ostream& operator<<(ostream& out, const OSDOp& op)
     case CEPH_OSD_OP_ROLLBACK:
       out << " " << snapid_t(op.op.snap.snapid);
       break;
+    case CEPH_OSD_OP_PREALLOC:
+      out << " " << op.op.prealloc.offset << "~" << op.op.prealloc.length << " flags " << op.op.prealloc.flags;
+      break;
     default:
       out << " " << op.op.extent.offset << "~" << op.op.extent.length;
       if (op.op.extent.truncate_seq)

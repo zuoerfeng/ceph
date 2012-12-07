@@ -260,6 +260,12 @@ struct ObjectOperation {
     bufferlist bl;
     add_data(CEPH_OSD_OP_SPARSE_READ, off, len, bl);
   }
+  void prealloc(uint64_t off, uint64_t len, uint64_t flags) {
+    OSDOp& osd_op = add_op(CEPH_OSD_OP_PREALLOC);
+    osd_op.op.prealloc.offset = off;
+    osd_op.op.prealloc.length = len;
+    osd_op.op.prealloc.flags = flags;
+  }
 
   void clone_range(const object_t& src_oid, uint64_t src_offset, uint64_t len, uint64_t dst_offset) {
     add_clone_range(CEPH_OSD_OP_CLONERANGE, dst_offset, len, src_oid, src_offset, CEPH_NOSNAP);

@@ -152,6 +152,8 @@ public:
       OP_OMAP_SETKEYS = 32, // cid, attrset
       OP_OMAP_RMKEYS = 33,  // cid, keyset
       OP_OMAP_SETHEADER = 34, // cid, header
+
+      OP_FALLOCATE = 35,    // cid, oid, offset, length
     };
 
   private:
@@ -337,6 +339,15 @@ public:
     }
     void zero(coll_t cid, const hobject_t& oid, uint64_t off, uint64_t len) {
       __u32 op = OP_ZERO;
+      ::encode(op, tbl);
+      ::encode(cid, tbl);
+      ::encode(oid, tbl);
+      ::encode(off, tbl);
+      ::encode(len, tbl);
+      ops++;
+    }
+    void fallocate(coll_t cid, const hobject_t& oid, uint64_t off, uint64_t len) {
+      __u32 op = OP_FALLOCATE;
       ::encode(op, tbl);
       ::encode(cid, tbl);
       ::encode(oid, tbl);

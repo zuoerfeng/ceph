@@ -158,6 +158,7 @@ A process that does the following::
  - continue with the next log entry
 
 We still need to be able to fully sync buckets that need to catch-up. So also do the following (in parallel)::
+
  - For each object in full sync list
  - periodically check list of buckets requiring full sync
  - if not empty:

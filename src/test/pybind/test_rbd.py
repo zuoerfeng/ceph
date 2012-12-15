@@ -5,10 +5,11 @@ import os
 
 from nose import with_setup, SkipTest
 from nose.tools import eq_ as eq, assert_raises
-from rados import Rados
+from rados import Rados, ObjectIterator
 from rbd import (RBD, Image, ImageNotFound, InvalidArgument, ImageExists,
                  ImageBusy, ImageHasSnapshots, ReadOnlyImage,
-                 FunctionNotSupported, RBD_FEATURE_LAYERING)
+                 FunctionNotSupported, RBD_FEATURE_LAYERING,
+                 RBD_FEATURE_STRIPINGV2)
 
 
 rados = None
@@ -631,3 +632,77 @@ class TestFlatten(TestClone):
 
     def test_larger_order(self):
         self.check_flatten_with_order(IMG_ORDER + 2)
+
+# return a set of all extant object numbers for image
+def objnums(image):
+    prefix = image.stat()['block_name_prefix']
+    objs = set()
+    for o in ObjectIterator(ioctx):
+        if o.key[:len(prefix)] == prefix:
+            objs.add(int(o.key[len(prefix)+1:]))
+    return objs
+
+class TestSparse(object):
+    def setUp(self):
+        self.rbd = RBD()
+        create_image()
+        self.image = Image(ioctx, IMG_NAME)
+
+    def tearDown(self):
+        self.image.close()
+        remove_image()
+
+    def test_nonstriped(self):
+        # resize image to a multiple of order, verify no data objects
+        self.image.resize(IMG_SIZE * 4)
+        eq(len(objnums(self.image)), 0)
+
+        # write, skip, write; verify objs 0 and 2, not 1
+        self.tearDown()
+        self.setUp()
+        blksize = 1 << IMG_ORDER
+        self.image.resize(3 * blksize)
+        eq(self.image.write('A' * blksize, 0), blksize)
+        eq(self.image.write('B' * blksize, 2 * blksize), blksize)
+        eq(objnums(self.image), set([0, 2]))
+
+        # skip, skip, write, verify obj 2 only
+        self.tearDown()
+        self.setUp()
+        self.image.resize(0)
+        self.image.resize(3 * blksize)
+        eq(self.image.write('B' * blksize, 2 * blksize), blksize)
+        eq(objnums(self.image), set([2]))
+
+class TestSparseStriped(object):
+    def setUp(self):
+        self.rbd = RBD()
+        self.rbd.create(ioctx, IMG_NAME, IMG_SIZE, IMG_ORDER,
+                        features=RBD_FEATURE_LAYERING | RBD_FEATURE_STRIPINGV2,
+                        old_format=False, stripe_unit = IMG_SIZE / 8,
+                        stripe_count = 4)
+        self.image = Image(ioctx, IMG_NAME)
+
+    def tearDown(self):
+        self.image.close()
+        remove_image()
+
+    def test_striped(self):
+        # resize doesn't create objects
+        #self.image.resize(IMG_SIZE * 4);
+        #eq(len(objnums(self.image)), 0)
+
+        #self.tearDown()
+        #self.setUp()
+        # Construct writes such that object 1 is zero, and verify
+        # The striping will result in two rows of 4 objects, so:
+        # D 0 D D
+        # D 0 D D
+        blksize = IMG_SIZE / 8
+
+        eq(self.image.write('A' * blksize, 0), blksize)
+        eq(self.image.write('a' * 2 * blksize, 2 * blksize), 2 * blksize)
+        eq(self.image.write('B' * blksize, 4 * blksize), blksize)
+        eq(self.image.write('b' * 2 * blksize, 6 * blksize), 2 * blksize)
+
+        eq(objnums(self.image), set([0, 2, 3]))

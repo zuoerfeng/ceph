@@ -272,26 +272,51 @@ void Striper::StripedReadResult::assemble_result(CephContext *cct, bufferlist& b
   if (p == partial.rend())
     return;
 
+  // partial is a map of object offset to (bufferlist, desired object length)
+  // end = objoff + objlen, or 1 past end in object
   uint64_t end = p->first + p->second.second;
   while (p != partial.rend()) {
     // sanity check
-    ldout(cct, 20) << "assemble_result(" << this << ") " << p->first << "~" << p->second.second
+    ldout(cct, 20) << "assemble_result(" << this << ") "
+		   << p->first << "~" << p->second.second
 		   << " " << p->second.first.length() << " bytes"
 		   << dendl;
+    // require offset of this chunk to be "current position less
+    // length of this chunk"; that is, require contiguity
     assert(p->first == end - p->second.second);
+
+    // new position is offset of this chunk
     end = p->first;
 
+    // len is actual data length
     size_t len = p->second.first.length();
-    if (len < p->second.second) {
+
+    // if there's data, but less than required:
+    if (len && (len < p->second.second)) {
+      // if zero_tail mode or we've already accumulated some data in bl
       if (zero_tail || bl.length()) {
+	// create a zero end-of-chunk, put it on front of the output bl,
+	// and suck any data we *did* have off the partial entry into output bl
+	ldout(cct, 20) << "assemble_result(" << this << ")"
+		       << " adding " << p->second.first.length()
+		       << " data, padded with " << p->second.second - len
+		       << " zeros" << dendl;
 	bufferptr bp(p->second.second - len);
 	bp.zero();
 	bl.push_front(bp);
 	bl.claim_prepend(p->second.first);
       } else {
+	// if there's less, but we don't have any yet or not zero-tail,
+	// suck everything we have onto the output list (partial end of req)
+	ldout(cct, 20) << "assemble_result(" << this << ") adding partial "
+		       << "buffer len " << p->second.first.length() << dendl;
 	bl.claim_prepend(p->second.first);
       }
     } else {
+      // if we have all the data, or there is none at all, grab a full
+      // or empty buffer and stick it on the front here
+      ldout(cct, 20) << "assemble_result(" << this << ") adding entire "
+		     << "buffer len " << p->second.first.length() << dendl;
       bl.claim_prepend(p->second.first);
     }
     p++;

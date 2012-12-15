@@ -831,13 +831,15 @@ done_img:
 
 static int do_import_from_stdin(librbd::RBD &rbd, librados::IoCtx& io_ctx,
 		                const char *imgname, int *order, int format,
-				int64_t features, int64_t size)
+				int64_t features, int64_t size,
+				long long stripe_unit, long long stripe_count)
 {
   int r;
   // start with inherent block size; double as needed; fix when done
   size_t cur_size = 1 << *order;
 
-  r = do_create(rbd, io_ctx, imgname, cur_size, order, format, features, 0, 0);
+  r = do_create(rbd, io_ctx, imgname, cur_size, order, format, features,
+	        stripe_unit, stripe_count);
   if (r < 0) {
     cerr << "rbd: image creation failed" << std::endl;
     return r;
@@ -883,7 +885,8 @@ static int do_import_from_stdin(librbd::RBD &rbd, librados::IoCtx& io_ctx,
 
 static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
 		     const char *imgname, int *order, const char *path,
-		     int format, uint64_t features, int64_t size)
+		     int format, uint64_t features, int64_t size,
+		     long long stripe_unit, long long stripe_count)
 {
   int fd, r;
   struct stat stat_buf;
@@ -896,9 +899,13 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
   if (*order == 0)
     *order = 22;
 
+  if ((stripe_unit == 0) && (stripe_count == 0)) {
+      stripe_unit = 1 << *order;
+      stripe_count = 1;
+  }
   if (!strcmp(path, "-"))
     return do_import_from_stdin(rbd, io_ctx, imgname, order, format,
-				features, size);
+				features, size, stripe_unit, stripe_count);
   fd = open(path, O_RDONLY);
 
   if (fd < 0) {
@@ -927,7 +934,8 @@ static int do_import(librbd::RBD &rbd, librados::IoCtx& io_ctx,
     }
   }
 
-  r = do_create(rbd, io_ctx, imgname, size, order, format, features, 0, 0);
+  r = do_create(rbd, io_ctx, imgname, size, order, format, features,
+	        stripe_unit, stripe_count);
   if (r < 0) {
     cerr << "rbd: image creation failed" << std::endl;
     close(fd);
@@ -2101,8 +2109,13 @@ if (!set_conf_param(v, p1, p2, p3)) { \
       cerr << "rbd: import requires pathname" << std::endl;
       return EXIT_FAILURE;
     }
+    if ((stripe_unit && !stripe_count) || (!stripe_unit && stripe_count)) {
+      cerr << "must specify both (or neither) of stripe-unit and stripe-count" << std::endl;
+      usage();
+      return EXIT_FAILURE;
+    }
     r = do_import(rbd, dest_io_ctx, destname, &order, path,
-		  format, features, size);
+		  format, features, size, stripe_unit, stripe_count);
     if (r < 0) {
       cerr << "rbd: import failed: " << cpp_strerror(-r) << std::endl;
       return EXIT_FAILURE;

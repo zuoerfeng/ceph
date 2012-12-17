@@ -2206,7 +2206,22 @@ reprotect_and_return_err:
       if (ret < 0)
 	return ret;
 
-      r = cb(total_read, ret, bl.c_str(), arg);
+      // bl might be smaller than ret/requested length, or even
+      // 0-length.  If 0, call back with NULL buffer.  If less, zerofill 
+      // here (because someone's going to have to).
+      // r = cb(total_read, ret, bl.c_str(), arg);
+      if (bl.length() == 0) {
+	ldout(ictx->cct, 20) << "read_iterate callback with NULL" << dendl;
+	r = cb(total_read, ret, NULL, arg);
+      } else {
+	if (bl.length() < read_len) {
+	  ldout(ictx->cct, 20) << "read_iterate callback zero-padding " << read_len - bl.length() << dendl;
+	  bl.append_zero(read_len - bl.length());
+	  assert(bl.length() == read_len);
+	}
+	ldout(ictx->cct, 20) << "read_iterate callback full " << read_len << dendl;
+	r = cb(total_read, ret, bl.c_str(), arg);
+      }
       if (r < 0)
 	return r;
 

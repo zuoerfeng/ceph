@@ -40,11 +40,13 @@ namespace librbd {
       bufferlist bl;
       destriper.assemble_result(cct, bl, true);
 
+      // legal to have read_buf or read_bl, but not neither nor both
+      assert((read_buf != NULL) ^ (read_bl != NULL));
       if (read_buf) {
-	assert(bl.length() == read_buf_len);
-	bl.copy(0, read_buf_len, read_buf);
-	ldout(cct, 20) << "AioCompletion::finalize() copied resulting " << bl.length()
-		       << " bytes to " << (void*)read_buf << dendl;
+	// pad end with zeros if necessary
+	ldout(cct, 20) << "AioCompletion::finalize() zero-padding " << bl.length() << " with extra " << read_buf_len - bl.length() << " to " << (void*)read_buf << dendl;
+	bl.append_zero(read_buf_len - bl.length());
+	bl.copy(0, bl.length(), read_buf);
       }
       if (read_bl) {
 	ldout(cct, 20) << "AioCompletion::finalize() moving resulting " << bl.length()

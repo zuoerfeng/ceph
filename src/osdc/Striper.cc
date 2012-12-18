@@ -313,11 +313,19 @@ void Striper::StripedReadResult::assemble_result(CephContext *cct, bufferlist& b
 	bl.claim_prepend(p->second.first);
       }
     } else {
-      // if we have all the data, or there is none at all, grab a full
-      // or empty buffer and stick it on the front here
-      ldout(cct, 20) << "assemble_result(" << this << ") adding entire "
-		     << "buffer len " << p->second.first.length() << dendl;
-      bl.claim_prepend(p->second.first);
+      // if there is no data, but we're still at the end, continue;
+      // if not at end we're forced to zero-pad
+      if (!bl.length()) {
+	ldout(cct, 20) << "assemble_result(" << this << ") skipping null "
+		       << "buffer " << p->second.first.length() << dendl;
+      } else {
+	ldout(cct, 20) << "assemble_result(" << this << ") zero-padding with "
+		       << p->second.second << dendl;
+	bufferptr bp(p->second.second);
+	bp.zero();
+	bl.push_front(bp);
+	bl.claim_prepend(p->second.first);
+      }
     }
     p++;
   }

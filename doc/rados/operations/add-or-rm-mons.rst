@@ -206,81 +206,66 @@ a cluster that has placement groups that are persistently not ``active + clean``
 
 .. _Changing a Monitor's IP address:
 
-Changing a Monitor's IP address
+Changing a Monitor's IP Address
 ===============================
 
-.. important:: Existing monitors are not supposed to change their IPs.
+.. important:: Existing monitors are not supposed to change their IP addresses.
 
-Ceph has strict requirements when it comes to the monitors, given that these 
-are a critical component and need to maintain a quorum for the whole system 
-to properly work.  For a quorum to be established, the monitors need to find 
-each other.
+Monitors are critical components of a Ceph cluster, and they need to maintain a
+quorum for the whole system to work properly. To establish a quorum, the
+monitors need to discover each other. Ceph has strict requirements for
+discovering monitors.
 
-A common misconception is that the monitors will infer the location of the other 
-monitors in the cluster by reading ``ceph.conf``, but this couldn't be farthest 
-from the truth.  Clients and the other daemons will in fact use ``ceph.conf`` 
-to discover the monitors, but not the monitors between themselves.  If you 
-refer to `Adding a Monitor (Manual)`_ you will see that you need to obtain the 
-current cluster monmap when creating a new monitor, as it is one of the required 
-arguments of ``ceph-mon -i {mon-id} --mkfs``.
-
-In the following sections we will explain a bit about the monitor's 
-consistency requirements, and draw a picture on why it's a bad idea to change 
-the monitor's IP addresses. Finally, we will present a couple of safe ways to 
-change a monitor's IP address in case of dire need.
-
+Ceph clients and other Ceph daemons use ``ceph.conf`` to discover monitors.
+However, monitors discover each other using the monitor map, not ``ceph.com``.
+For example,  if you refer to `Adding a Monitor (Manual)`_ you will see that you
+need to obtain the current monmap for the cluster when creating a new monitor,
+as it is one of the required arguments of ``ceph-mon -i {mon-id} --mkfs``. The
+following sections explain the consistency requirements for Ceph monitors, and a
+few safe ways to change a monitor's IP address.
 
 Consistency Requirements
 ------------------------
 
-The monitors will always resort to the monmap stashed on their store 
-when finding the other monitors in the cluster.  This approach avoids silly 
-mistakes that would be likely to happen if we were using ``ceph.conf`` 
-directly, such as typos when specifying a monitor address or port that could 
-break the cluster.  Above all, it confers the monitors a strict guarantee that 
-the contents of their monmap are the ones that the cluster agrees on, and this 
-consensus is crucial on Ceph, specially considering that the monitors are 
-responsible for sharing the monmap with clients and other components in the 
-cluster.
+A monitor always refers to the local copy of the monmap  when discovering other
+monitors in the cluster.  Using the monmap instead of ``ceph.conf`` avoids
+errors that could  break the cluster (e.g., typos in ``ceph.conf`` when
+specifying a monitor address or port). Since monitors use monmaps for discovery
+and they share monmaps with clients and other Ceph daemons, the monmap provides
+monitors with a strict guarantee that their consensus is valid.
 
-As with any other updates on the monitor, changes to the monmap always run 
-through a distributed consensus algorithm called Paxos.  Each update, such 
-as adding or removing a monitor, is agreed among all the monitors in the quorum, 
-ensuring that all end up with the same version.  Furthermore, updates can be 
-seen as incremental, meaning that the monitors will hold the latest agreed upon 
-version and a reasonable set of previous versions, allowing a new monitor (or a 
-monitor that was down for a considerable amount of time) to catch up with the 
-current cluster state.  This is how serious map consistency is considered on Ceph.
+Strict consistency also applies to updates to the monmap. As with any other
+updates on the monitor, changes to the monmap always run through a distributed
+consensus algorithm called `Paxos`_. The monitors must agree on each update to
+the monmap, such as adding or removing a monitor, to ensure that each monitor in
+the quorum has the same version of the monmap. Updates to the monmap are
+incremental so that monitors have the latest agreed upon version, and a set of
+previous versions, allowing a monitor that has an older version of the monmap to
+catch up with the current state of the cluster.
 
-Now for the sake of the argument, say that we were reading the other monitors' 
-location (i.e., ip:port) from ``ceph.conf``.  Not only would we have to 
-accordingly change the configuration file on all the nodes each time we wanted 
-to add a new monitor, to reflect the new monitor, but we would be in a world of 
-pain if we happened to make a mistake that could be as simple as misspelling the 
-monitor's name or port on one of the nodes.  Given that the monitors' strict 
-requirements for allowing other monitors in the cluster, if one of the existing 
-monitors were to be unable to correctly identify another monitor, we could very 
-well end up without quorum; worse, we could end up with some anomalous state in 
-which most monitors recognize one other monitor as being in the cluster, while 
-others don't.  The last thing one wants in a cluster is allowing room for chaos 
-on a critical component such as the monitors.
+If monitors discovered each other through the Ceph configuration file instead of
+through the monmap, it would introduce additional risks because the Ceph
+configuration files aren't updated and distributed automatically. Monitors
+might inadvertantly use an older ``ceph.conf`` file, fail to recognize a
+monitor, fall out of a quorum, or develop a situation where `Paxos`_ isn't able
+to determine the current state of the system accurately. Consequently,  making
+changes to an existing monitor's IP address must be done with  great care.
+
+.. _Paxos: http://en.wikipedia.org/wiki/Paxos_(computer_science)
 
 
 Changing a Monitor's IP address (The Right Way)
 -----------------------------------------------
 
-We have established that changing the IPs on the ``ceph.conf`` is not an option 
-from the monitor's point-of-view.  It's still required, of course, but only so 
-that clients and the other daemons know where to contact the monitors.  From the 
-monitor's perspective however, not so much.
+Changing a monitor's IP address in ``ceph.conf`` only is not sufficient to
+ensure that other monitors in the cluster will receive the update.  To change a
+monitor's IP address, you must add a new monitor with the IP  address you want
+to use (as described in `Adding a Monitor (Manual)`_),  ensure that the new
+monitor successfully joins the  quorum; then, remove the monitor that uses the
+old IP address. Then, update the ``ceph.conf`` file to ensure that clients and
+other daemons know the IP address of the new monitor.
 
-The right way of changing a monitor's IP address comes in the form of adding a 
-new monitor with the new IP address (as described in `Adding a Monitor (Manual)`_), 
-prior to removing the monitor we want to get rid of.  This way will ensure that 
-not only the remaining monitors know where to contact the new monitor, but it will 
-also maintain availability.
-
-For instance, lets assume there are three monitors in place, such as :: 
+For example, lets assume there are three monitors in place, such as :: 
 
 	[mon.a]
 		host = host01
@@ -292,33 +277,30 @@ For instance, lets assume there are three monitors in place, such as ::
 		host = host03
 		addr = 10.0.0.3:6789
 
-Now say that we want to change ``mon.c`` to ``host04``, which has the IP address 
-``10.0.0.4``. We would follow the steps on `Adding a Monitor (Manual)`_, adding a 
-new monitor ``mon.d``, and then would remove ``mon.c`` as described on 
-`Removing a Monitor (Manual)`_.  One should be aware that ``mon.d`` must be 
-running before removing ``mon.c``, or quorum will be broken.  Moving all three 
-monitors would thus require repeating this process as many times as needed.
-
+To change ``mon.c`` to ``host04`` with the IP address  ``10.0.0.4``, follow the
+steps in `Adding a Monitor (Manual)`_ by adding a  new monitor ``mon.d``. Ensure
+that ``mon.d`` is  running before removing ``mon.c``, or it will break the
+quorum. Remove ``mon.c`` as described on  `Removing a Monitor (Manual)`_. Moving
+all three  monitors would thus require repeating this process as many times as
+needed.
 
 Changing a Monitor's IP address (The Messy Way)
 -----------------------------------------------
 
-There may come a time when the monitors must be moved to a different network, 
-a different part of the datacenter or a different datacenter altogether.  While 
-it is possible to do it, the process becomes a bit more hazardous.
+There may come a time when the monitors must be moved to a different network,  a
+different part of the datacenter or a different datacenter altogether. While  it
+is possible to do it, the process becomes a bit more hazardous.
 
-In such a case, the solution is to generate a new monmap with updated IP 
-addresses for all the monitors in the cluster, and inject the new map on each 
-individual monitor.  This is not the most user-friendly approach, but we do not 
-expect this to be something that needs to be done every other week.  As it is 
-clearly stated on the top of this section, monitors are not supposed to change 
+In such a case, the solution is to generate a new monmap with updated IP
+addresses for all the monitors in the cluster, and inject the new map on each
+individual monitor.  This is not the most user-friendly approach, but we do not
+expect this to be something that needs to be done every other week.  As it is
+clearly stated on the top of this section, monitors are not supposed to change
 IP addresses.
 
-Take the previous monitor configuration and say that we want to move all the 
-monitors from the ``10.0.0.x`` range to ``10.1.0.x``, and that these networks 
-are unable to communicate.  Here is what we should do in such a remote 
-scenario:
-
+Using the previous monitor configuration as an example, assume you want to move
+all the  monitors from the ``10.0.0.x`` range to ``10.1.0.x``, and these
+networks  are unable to communicate.  Use the following procedure:
 
 #. Retrieve the monitor map, where ``{tmp}`` is the path to 
    the retrieved monitor map, and ``{filename}`` is the name of the file 
@@ -326,7 +308,7 @@ scenario:
 
 	ceph mon getmap -o {tmp}/{filename}
 
-#. These should be the contents of the monmap. ::
+#. The following example demonstrates the contents of the monmap. ::
 
 	$ monmaptool --print {tmp}/{filename}
 	
@@ -369,10 +351,9 @@ scenario:
 	1: 10.1.0.2:6789/0 mon.b
 	2: 10.1.0.3:6789/0 mon.c
 
-At this point, it is assumed that either the servers have physically moved to 
-the new location, or that the monitor's stores were.  That said, the next step 
-is to make the changed monmap available to the monitors and inject it to each 
-individual monitor.
+At this point, we assume the monitors (and stores) are installed at the new
+location. The next step is to propagate the modified monmap to the new 
+monitors, and inject the modified monmap into each new monitor.
 
 #. First, make sure to stop all your monitors.  Injection must be done while 
    the daemon is not running.
@@ -383,6 +364,5 @@ individual monitor.
 
 #. Restart the monitors.
 
-After this step, your monitors should be able to live forever happy in their 
-new homes.
-
+After this step, migration to the new location is complete and 
+the monitors should operate successfully.

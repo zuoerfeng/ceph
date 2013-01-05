@@ -810,6 +810,11 @@ TEST_P(MountedTest, ReaddirRCB) {
   ASSERT_LE(0, ceph_closedir(cmount, dirp));
 }
 
+TEST_P(MountedTest, HasReplicaOpPerfCounter) {
+  int ops = get_objecter_replica_ops();
+  ASSERT_GE(ops, 0);
+}
+
 INSTANTIATE_TEST_CASE_P(ParamMount, MountedTest,
     ::testing::Values(false, true));
 

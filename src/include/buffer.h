@@ -248,7 +248,7 @@ public:
 					p(other.p),
 					p_off(other.p_off) {}
 
-      iterator operator=(const iterator& other) {
+      iterator& operator=(const iterator& other) {
 	if (this != &other) {
 	  bl = other.bl;
 	  ls = other.ls;
@@ -305,8 +305,12 @@ public:
     
     list(const list& other) : _buffers(other._buffers), _len(other._len), last_p(this) { }
     list& operator= (const list& other) {
-      _buffers = other._buffers;
-      _len = other._len;
+      if (this != &other) {
+        _buffers = other._buffers;
+        _len = other._len;
+        last_p = other.last_p;
+	append_buffer = other.append_buffer;
+      }
       return *this;
     }
 

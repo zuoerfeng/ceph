@@ -2891,7 +2891,15 @@ int FileStore::_write(coll_t cid, const hobject_t& oid,
   }
 
   // write
-  r = bl.write_fd(fd);
+  if (bl.length() > 65536) {
+    // hack to see what clone-from-journal perf might look like
+    bufferlist f;
+    f.append("blah");
+    ::lseek64(fd, offset + bl.length() - f.length(), SEEK_SET);
+    f.write_fd(fd);
+  } else {
+    r = bl.write_fd(fd);
+  }
   if (r == 0)
     r = bl.length();
 

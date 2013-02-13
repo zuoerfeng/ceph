@@ -1159,10 +1159,9 @@ void Server::dispatch_client_request(MDRequest *mdr)
 
     // inodes ops.
   case CEPH_MDS_OP_LOOKUP:
-  case CEPH_MDS_OP_LOOKUPSNAP:
     handle_client_getattr(mdr, true);
     break;
-
+  case CEPH_MDS_OP_LOOKUPSNAP:
   case CEPH_MDS_OP_GETATTR:
     handle_client_getattr(mdr, false);
     break;

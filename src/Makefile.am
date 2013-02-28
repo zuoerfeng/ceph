@@ -483,6 +483,13 @@ rados_SOURCES = rados.cc rados_import.cc rados_export.cc rados_sync.cc common/ob
 rados_LDADD = libcls_lock_client.a librados.la $(LIBGLOBAL_LDA)
 bin_PROGRAMS += rados
 
+libcls_lua_client_la_SOURCES = \
+	cls/lua/cls_lua_client.cc \
+	cls/lua/cls_lua_client.hpp
+libcls_lua_client_la_CXXFLAGS = ${AM_CXXFLAGS}
+libcls_lua_client_la_LIBADD = librados.la
+lib_LTLIBRARIES += libcls_lua_client.la
+
 if WITH_REST_BENCH
 
 rest_bench_SOURCES = tools/rest_bench.cc common/obj_bencher.cc
@@ -1471,6 +1478,10 @@ rados_include_DATA = \
 	$(srcdir)/include/buffer.h \
 	$(srcdir)/include/page.h \
 	$(srcdir)/include/crc32c.h
+
+libcls_lua_client_includedir = $(includedir)/cls_lua
+libcls_lua_client_include_DATA = \
+	$(srcdir)/cls/lua/cls_lua_client.hpp
 
 #crush_includedir = $(includedir)/crush
 #crush_include_DATA = \

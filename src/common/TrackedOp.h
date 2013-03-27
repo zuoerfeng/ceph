@@ -158,4 +158,17 @@ public:
   virtual void dump(utime_t now, Formatter *f) const;
 };
 
+template <typename MessageType>
+class CTOp {
+  TrackedOpRef ref;
+public:
+  CTOp(TrackedOp _ref) :
+    ref(_ref)
+    { assert(MessageType::MESSAGE_TYPE_ID == ref->request->get_type()); }
+  TrackedOp get_op() { return ref; }
+  MessageType * operator*() {
+    return static_cast<MessageType>(ref->request);
+  }
+};
+
 #endif

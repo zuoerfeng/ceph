@@ -63,16 +63,6 @@ class MDSMonitor : public PaxosService {
     }
   };
 
-  class C_Stop : public Context {
-    MDSMonitor *mm;
-  public:
-    C_Stop(MDSMonitor *m) : mm(m) { }
-    void finish(int r) {
-      if (r >= 0)
-        mm->do_stop();
-    }
-  };
-
   void create_new_fs(MDSMap &m, int metadata_pool, int data_pool);
 
 
@@ -130,7 +120,6 @@ public:
   }
 
   void tick();     // check state, take actions
-  void do_stop();
 
   void dump_info(Formatter *f);
 

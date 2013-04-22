@@ -3034,6 +3034,12 @@ bool Monitor::_ms_dispatch(Message *m)
   if (s)
     dout(20) << " caps " << s->caps.get_str() << dendl;
 
+  if (is_synchronizing() && m->get_type() != MSG_MON_SYNC) {
+    dout(10) << " we're synchronizing -- drop message" << dendl;
+    m->put();
+    goto out;
+  }
+
   {
     switch (m->get_type()) {
       
@@ -3194,6 +3200,8 @@ bool Monitor::_ms_dispatch(Message *m)
       ret = false;
     }
   }
+
+out:
   if (s) {
     s->put();
   }

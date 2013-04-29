@@ -39,6 +39,8 @@ public:
   int umount();
   void sync();
 
+  void compact();
+
   // ints (stored as ascii)
   version_t get_int(const char *a, const char *b=0) WARN_UNUSED_RESULT;
   void put_int(version_t v, const char *a, const char *b=0);

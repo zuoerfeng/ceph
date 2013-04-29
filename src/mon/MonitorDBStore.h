@@ -66,6 +66,9 @@ class MonitorDBStore
 
   struct Transaction {
     list<Op> ops;
+    uint64_t total_erase;
+    uint64_t total_put;
+    uint64_t total_bytes;
 
     enum {
       OP_PUT	= 1,
@@ -74,6 +77,8 @@ class MonitorDBStore
 
     void put(string prefix, string key, bufferlist& bl) {
       ops.push_back(Op(OP_PUT, prefix, key, bl));
+      total_put ++;
+      total_bytes += bl.length();
     }
 
     void put(string prefix, version_t ver, bufferlist& bl) {
@@ -90,6 +95,7 @@ class MonitorDBStore
 
     void erase(string prefix, string key) {
       ops.push_back(Op(OP_ERASE, prefix, key));
+      total_erase ++;
     }
 
     void erase(string prefix, version_t ver) {
@@ -112,6 +118,10 @@ class MonitorDBStore
 
     void append(Transaction& other) {
       ops.splice(ops.end(), other.ops);
+
+      total_put += other.total_put;
+      total_erase += other.total_erase;
+      total_bytes += other.total_bytes;
     }
 
     void append_from_encoded(bufferlist& bl) {
@@ -189,6 +199,10 @@ class MonitorDBStore
 	break;
       }
     }
+    generic_dout(0) << __func__ << " put: " << t.total_put
+                     << " erase: " << t.total_erase
+                     << " bytes: " << t.total_bytes << dendl;
+
     return db->submit_transaction_sync(dbt);
   }
 

@@ -1237,15 +1237,20 @@ bool Paxos::is_writeable()
     is_lease_valid();
 }
 
-void Paxos::list_proposals(ostream& out)
+void Paxos::debug_proposals(ostream& out)
 {
-  out << __func__ << " " << proposals.size() << " in queue:\n";
+  if (proposals.empty())
+    return;
+
+  size_t n = 0;
   list<Context*>::iterator p_it = proposals.begin();
-  for (int i = 0; p_it != proposals.end(); ++p_it, ++i) {
+  out << __func__ << "\n";
+  for ( ; p_it != proposals.end(); ++p_it, ++n) {
     C_Proposal *p = (C_Proposal*) *p_it;
-    out << "-- entry #" << i << "\n";
-    out << *p << "\n";
+    out << __func__ << "queued-on: " << p->proposal_time
+        << " size: " << p->bl.length() << "\n";
   }
+  out << __func__ << " " << n << " queued proposals\n";
 }
 
 void Paxos::propose_queued()
@@ -1263,8 +1268,8 @@ void Paxos::propose_queued()
 	  << " " << proposal->bl.length() << " bytes" << dendl;
   proposal->proposed = true;
 
-  dout(30) << __func__ << " ";
-  list_proposals(*_dout);
+  dout(20) << __func__ << " ";
+  debug_proposals(*_dout);
   *_dout << dendl;
 
   begin(proposal->bl);

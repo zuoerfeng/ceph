@@ -1296,12 +1296,12 @@ public:
   }
 
   /**
-   * List all queued proposals
+   * Output debug info on all queued proposals
    *
-   * @param out[out] Output Stream onto which we will output the list
-   *		     of queued proposals.
+   * @param out[out] Output Stream onto which we will output the debug info
+   *		     for queued proposals.
    */
-  void list_proposals(ostream& out);
+  void debug_proposals(ostream& out);
   /**
    * Propose a new value to the Leader.
    *

@@ -3036,7 +3036,7 @@ void Monitor::send_command(const entity_inst_t& inst,
   try_send_message(c, inst);
 }
 
-void Monitor::waitlist_or_zap_client(Message *m)
+void Monitor::waitlist_or_zap_client(Message *m, bool force_zap)
 {
   /**
    * Wait list the new session until we're in the quorum, assuming it's
@@ -3055,7 +3055,7 @@ void Monitor::waitlist_or_zap_client(Message *m)
   utime_t too_old = ceph_clock_now(g_ceph_context);
   too_old -= g_ceph_context->_conf->mon_lease;
   if (m->get_recv_stamp() > too_old &&
-      con->is_connected()) {
+      con->is_connected() && !force_zap) {
     dout(5) << "waitlisting message " << *m << dendl;
     maybe_wait_for_quorum.push_back(new C_RetryMessage(this, m));
   } else {
@@ -3129,7 +3129,8 @@ bool Monitor::_ms_dispatch(Message *m)
     dout(20) << " caps " << s->caps.get_str() << dendl;
 
   if (is_synchronizing() && !src_is_mon) {
-    waitlist_or_zap_client(m);
+    bool force_zap = (m->get_type() == MSG_MON_ELECTION);
+    waitlist_or_zap_client(m, force_zap);
     return true;
   }
 

@@ -184,13 +184,19 @@ class MonitorDBStore
   int apply_transaction(MonitorDBStore::Transaction& t) {
     KeyValueDB::Transaction dbt = db->get_transaction();
 
+    uint64_t num_erase = 0, num_put = 0;
+    uint64_t num_bytes = 0;
+
     for (list<Op>::iterator it = t.ops.begin(); it != t.ops.end(); ++it) {
       Op& op = *it;
       switch (op.type) {
       case Transaction::OP_PUT:
+        num_put ++;
+        num_bytes += op.bl.length();
 	dbt->set(op.prefix, op.key, op.bl);
 	break;
       case Transaction::OP_ERASE:
+        num_erase ++;
 	dbt->rmkey(op.prefix, op.key);
 	break;
       default:
@@ -199,9 +205,9 @@ class MonitorDBStore
 	break;
       }
     }
-    generic_dout(0) << __func__ << " put: " << t.total_put
-                     << " erase: " << t.total_erase
-                     << " bytes: " << t.total_bytes << dendl;
+    generic_dout(0) << __func__ << " put: " << num_put
+                     << " erase: " << num_erase
+                     << " bytes: " << num_bytes << dendl;
 
     return db->submit_transaction_sync(dbt);
   }

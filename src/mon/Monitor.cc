@@ -1048,6 +1048,8 @@ int Monitor::_pick_random_mon(int other)
     return 0;
 
   int max = monmap->size();
+  if (other >= 0)
+    max--;
   int n = sync_rng() % max;
   if (other >= 0 && n >= other)
     n++;

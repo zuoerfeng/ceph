@@ -108,6 +108,16 @@ int main(int argc, char *argv[])
   string path(argv[1]);
   string cmd(argv[2]);
 
+  if (cmd == "compact") {
+    leveldb::DB *db;
+    leveldb::Status s = leveldb::DB::Open(leveldb::Options(), path, &db);
+    assert(s.ok());
+    std::cout << "Compacting" << std::endl;
+    db->CompactRange(NULL,NULL);
+
+    return 0;
+  }
+
   StoreTool st(path);
 
   if (cmd == "list") {

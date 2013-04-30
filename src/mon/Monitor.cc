@@ -1090,6 +1090,10 @@ void Monitor::sync_timeout(entity_inst_t &entity)
 
     unsigned int i = 0;
     string entity_name = monmap->get_name(entity.addr);
+
+dout(0) << __func__ << " entity " << entity << " name " << entity_name << dendl;
+dout(0) << __func__ << " our name " << name << dendl;
+
     string debug_mon = g_conf->mon_sync_debug_provider;
     string debug_fallback = g_conf->mon_sync_debug_provider_fallback;
     while ((i++) < 2*monmap->size()) {
@@ -1105,8 +1109,11 @@ void Monitor::sync_timeout(entity_inst_t &entity)
 	  new_mon = debug_mon;
       }
 
+dout(0) << __func__ << " randomly picking mon name " << new_mon << dendl;
+
       if ((new_mon != name) && (new_mon != entity_name)) {
 	sync_provider->entity = monmap->get_inst(new_mon);
+dout(0) << __func__ << " randomly choosing " << sync_provider->entity << " name " << new_mon << dendl;
 	sync_state = SYNC_STATE_START;
 	sync_start_chunks(sync_provider);
 	return;
@@ -1117,6 +1124,7 @@ void Monitor::sync_timeout(entity_inst_t &entity)
     for (int i = 0; i < (int)monmap->size(); ++i) {
       entity_inst_t i_inst = monmap->get_inst(i);
       if (i != rank && i_inst != entity) {
+dout(0) << __func__ << " brute forcing choosing " << i_inst << dendl;
 	sync_provider->entity = i_inst;
 	sync_state = SYNC_STATE_START;
 	sync_start_chunks(sync_provider);

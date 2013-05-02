@@ -8,8 +8,10 @@ echo "starting hadoop-terasort test"
 command0="export JAVA_HOME=/usr/lib/jvm/default-java"
 command1="$TESTDIR/apache_hadoop/bin/hadoop dfs -mkdir /tests"
 #command2="$TESTDIR/apache_hadoop/bin/hadoop dfs -mkdir /tests/terasort_data"
-command3="$TESTDIR/apache_hadoop/bin/hadoop jar $TESTDIR/apache_hadoop/build/hadoop-*examples*jar teragen 20000000 /tests/terasort_data"
-command4="$TESTDIR/apache_hadoop/bin/hadoop dfs -rmr /tests/terasort_data"
+command2="$TESTDIR/apache_hadoop/bin/hadoop jar $TESTDIR/apache_hadoop/build/hadoop-*examples*jar teragen 20000000 /tests/terasort_input"
+command3="$TESTDIR/apache_hadoop/bin/hadoop jar $TESTDIR/apache_hadoop/build/hadoop-*examples*jar terasort /tests/terasort_input /test/terasort_output"
+command4="$TESTDIR/apache_hadoop/bin/hadoop jar $TESTDIR/apache_hadoop/build/hadoop-*examples*jar teravalidate /test/terasort_output"
+command5="$TESTDIR/apache_hadoop/bin/hadoop dfs -rmr /tests"
 #command1="mkdir -p $TESTDIR/hadoop_input"
 #command2="wget http://ceph.com/qa/hadoop_input_files.tar -O $TESTDIR/hadoop_input/files.tar"
 #command3="cd $TESTDIR/hadoop_input"
@@ -27,6 +29,7 @@ echo $command1
 echo $command2
 echo $command3
 echo $command4
+echo $command5
 echo "----------------------"
 
 #now execute the command
@@ -34,7 +37,8 @@ $command0
 $command1
 $command2
 $command3
-#$command4
+$command4
+#$command5
 
 echo "completed hadoop-terasort test"
 exit 0

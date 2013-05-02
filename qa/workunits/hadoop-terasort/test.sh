@@ -3,7 +3,7 @@
 echo "starting hadoop-terasort test"
 
 # bail if $TESTDIR is not set as this test will fail in that scenario
-[ -z $TESTDIR] && { echo "\$TESTDIR needs to be set, but is not. Exiting."; exit 1; }
+[ -z $TESTDIR ] && { echo "\$TESTDIR needs to be set, but is not. Exiting."; exit 1; }
 
 command0="export JAVA_HOME=/usr/lib/jvm/default-java"
 command1="$TESTDIR/apache_hadoop/bin/hadoop dfs -mkdir /tests"
@@ -22,23 +22,18 @@ command5="$TESTDIR/apache_hadoop/bin/hadoop dfs -rmr /tests"
 #command8="rm -rf $TESTDIR/hadoop_input"
 
 
-#print out the command
-echo "----------------------"
 echo $command0
-echo $command1
-echo $command2
-echo $command3
-echo $command4
-echo $command5
-echo "----------------------"
-
-#now execute the command
 $command0
+echo $command1
 $command1
+echo $command2
 $command2
+echo $command3
 $command3
+echo $command4
 $command4
-#$command5
+echo $command5
+$command5
 
 echo "completed hadoop-terasort test"
 exit 0

@@ -7,7 +7,7 @@ echo "starting hadoop-terasort test"
 
 command0="export JAVA_HOME=/usr/lib/jvm/default-java"
 command1="$TESTDIR/apache_hadoop/bin/hadoop dfs -mkdir /tests"
-command2="$TESTDIR/apache_hadoop/bin/hadoop dfs -mkdir /tests/terasort_data"
+#command2="$TESTDIR/apache_hadoop/bin/hadoop dfs -mkdir /tests/terasort_data"
 command3="$TESTDIR/apache_hadoop/bin/hadoop jar $TESTDIR/apache_hadoop/build/hadoop-*examples*jar teragen 20000000 /tests/terasort_data"
 command4="$TESTDIR/apache_hadoop/bin/hadoop dfs -rmr /tests/terasort_data"
 #command1="mkdir -p $TESTDIR/hadoop_input"

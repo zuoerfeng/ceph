@@ -216,6 +216,27 @@ int main(int argc, char **argv) {
       goto done;
     }
     bl.write_fd(fd);
+  } else if (cmd == "getmonmap") {
+    if (!store_path.size()) {
+      std::cerr << "need mon store path" << std::endl;
+      std::cerr << desc << std::endl;
+      goto done;
+    }
+    version_t v;
+    if (version == -1) {
+      v = st.get("monmap", "last_committed");
+    } else {
+      v = version;
+    }
+
+    bufferlist bl;
+    /// XXX: this is not ok, osdmap and full should be abstracted somewhere
+    int r = st.get("monmap", v, bl);
+    if (r < 0) {
+      std::cerr << "Error getting map: " << cpp_strerror(r) << std::endl;
+      goto done;
+    }
+    bl.write_fd(fd);
   } else if (cmd == "dump-trace") {
     if (tfile.empty()) {
       std::cerr << "Need trace_file" << std::endl;

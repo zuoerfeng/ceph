@@ -665,6 +665,7 @@ Inode * Client::add_update_inode(InodeStat *st, utime_t from, MetaSession *sessi
 	   p != in->dir->dentry_map.end();
 	   ++p) {
 	unlink(p->second, true, true);  // keep dir, keep dentry
+	p->second->lease_mds = -1;
       }
       if (in->dir->dentry_map.empty())
 	close_dir(in->dir);
@@ -835,6 +836,7 @@ void Client::insert_readdir_results(MetaRequest *request, MetaSession *session, 
 	  Dentry *dn = pd->second;
 	  ++pd;
 	  unlink(dn, true, true);  // keep dir, dentry
+	  dn->lease_mds = -1;
 	} else {
 	  ++pd;
 	}
@@ -886,6 +888,7 @@ void Client::insert_readdir_results(MetaRequest *request, MetaSession *session, 
 	  Dentry *dn = pd->second;
 	  ++pd;
 	  unlink(dn, true, true); // keep dir, dentry
+	  dn->lease_mds = -1;
 	} else
 	  ++pd;
       }
@@ -934,12 +937,14 @@ Inode* Client::insert_trace(MetaRequest *request, MetaSession *session)
 	Dentry *od = request->old_dentry();
 	ldout(cct, 10) << " unlinking rename src dn " << od << " for traceless reply" << dendl;
 	assert(od);
-	unlink(od, true, true);  // keep dir, dentry
+	unlink(od, true, true);  // keep dir, dentr
+	od->lease_mds = -1;
       } else if (request->head.op == CEPH_MDS_OP_RMDIR ||
 		 request->head.op == CEPH_MDS_OP_UNLINK) {
 	// unlink, rmdir
 	ldout(cct, 10) << " unlinking unlink/rmdir dn " << d << " for traceless reply" << dendl;
 	unlink(d, true, true);  // keep dir, dentry
+	d->lease_mds = -1;
       }
     }
     return NULL;
@@ -2159,6 +2164,7 @@ Dentry* Client::link(Dir *dir, const string& name, Inode *in, Dentry *dn)
       Dentry *olddn = in->get_first_parent();
       assert(olddn->dir != dir || olddn->name != name);
       unlink(olddn, true, true);  // keep dir, dentry
+      olddn->lease_mds = -1;
     }
 
     in->dn_set.insert(dn);

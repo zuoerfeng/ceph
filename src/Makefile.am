@@ -338,6 +338,7 @@ noinst_LIBRARIES =
 # libcephfs
 libcephfs_la_SOURCES = \
 	libcephfs.cc
+
 libcephfs_la_CFLAGS= ${CRYPTO_CFLAGS} ${AM_CFLAGS}
 libcephfs_la_CXXFLAGS= ${AM_CXXFLAGS}
 libcephfs_la_LIBADD = libclient.la
@@ -1763,6 +1764,7 @@ noinst_LTLIBRARIES += libosdc.la
 
 libclient_la_SOURCES = \
 	client/Client.cc \
+	client/barrier.cc \
 	client/Inode.cc \
 	client/Dentry.cc \
 	client/MetaRequest.cc \
@@ -1827,6 +1829,7 @@ noinst_HEADERS = \
 	client/ClientSnapRealm.h\
         client/SyntheticClient.h\
         client/Trace.h\
+	client/barrier.h\
         client/fuse_ll.h\
 	client/ioctl.h\
         client/hadoop/CephFSInterface.h\

@@ -531,6 +531,14 @@ void Monitor::init_paxos()
   }
 }
 
+void Monitor::finish_paxos_proposal()
+{
+  dout(10) << __func__ << dendl;
+  for (int i = 0; i < PAXOS_NUM; ++i) {
+    paxos_service[i]->refresh();
+  }
+}
+
 void Monitor::register_cluster_logger()
 {
   if (!cluster_logger_registered) {

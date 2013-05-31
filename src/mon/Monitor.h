@@ -1412,6 +1412,7 @@ public:
   int preinit();
   int init();
   void init_paxos();
+  void finish_paxos_proposal();
   void shutdown();
   void tick();
 

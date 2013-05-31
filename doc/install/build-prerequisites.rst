@@ -17,6 +17,9 @@ started quickly. Ceph build scripts depend on the following:
 - ``g++``
 - ``git``
 - ``libboost-dev``
+- ``libboost-thread-dev``
+- ``libboost-system-dev``
+- ``libboost-program-options-dev``
 - ``libedit-dev``
 - ``libssl-dev``
 - ``libtool``
@@ -65,6 +68,8 @@ your host. ::
 
 	sudo apt-get install uuid-dev libkeyutils-dev libgoogle-perftools-dev libatomic-ops-dev libaio-dev libgdata-common libgdata13 libsnappy-dev libleveldb-dev
 
+Note: libsnappy-dev and libleveldb-dev are not available upstream for natty, oneiric, and squeeze.  Backports for Ceph can be found at ceph.com/debian-leveldb. 
+
 
 Debian
 ======
@@ -74,17 +79,39 @@ Alternatively, you may also install::
 	aptitude install fakeroot dpkg-dev
 	aptitude install debhelper cdbs libexpat1-dev libatomic-ops-dev
 
-openSUSE 11.2 (and later)
-=========================
+Centos/RHEL 6.3 (and later)
+===========================
 
 - ``boost-devel``
+- ``boost-thread-devel``
+- ``boost-system-devel``
+- ``boost-program-options-devel``
 - ``gcc-c++``
 - ``libedit-devel``
 - ``libopenssl-devel``
 - ``fuse-devel`` (optional)
+- ``gperftools-devel``
+
+Execute ``yum install`` for each dependency that isn't installed on your 
+host. ::
+
+	yum install boost-devel gcc-c++ libedit-devel libopenssl-devel fuse-devel gperftools-devel
+
+
+openSUSE 11.2 (and later)
+=========================
+
+- ``boost-devel``
+- ``boost-thread-devel``
+- ``boost-system-devel``
+- ``boost-program-options-devel``
+- ``gcc-c++``
+- ``libedit-devel``
+- ``libopenssl-devel``
+- ``fuse-devel`` (optional)
+- ``gperftools-devel``
 
 Execute ``zypper install`` for each dependency that isn't installed on your 
 host. ::
 
-	zypper install boost-devel gcc-c++ libedit-devel libopenssl-devel fuse-devel
-
+	zypper install boost-devel gcc-c++ libedit-devel libopenssl-devel fuse-devel gperftools-devel

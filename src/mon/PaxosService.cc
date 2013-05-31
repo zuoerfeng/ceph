@@ -106,6 +106,21 @@ bool PaxosService::dispatch(PaxosServiceMessage *m)
   return true;
 }
 
+void PaxosService::refresh()
+{
+  dout(10) << __func__ << dendl;
+
+  // If we're not active, we can just return because we can safely guarantee
+  // that, with the current is_active() conditions, we will be called for sure
+  // when we become active.
+  if (!is_active())
+    return;
+
+  update_cached_versions();
+  update_from_paxos();
+}
+
+
 void PaxosService::scrub()
 {
   dout(10) << __func__ << dendl;
@@ -252,8 +267,7 @@ void PaxosService::_active()
   dout(10) << "_active" << dendl;
 
   // pull latest from paxos
-  update_cached_versions();
-  update_from_paxos();
+  refresh();
 
   scrub();
 

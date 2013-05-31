@@ -63,9 +63,6 @@ bool PaxosService::dispatch(PaxosServiceMessage *m)
     return true;
   }
 
-  // make sure service has latest from paxos.
-  update_from_paxos();
-
   // preprocess
   if (preprocess_query(m)) 
     return true;  // easy!

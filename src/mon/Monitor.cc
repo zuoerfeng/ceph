@@ -3325,14 +3325,6 @@ bool Monitor::_ms_dispatch(Message *m)
 	}
 
 	paxos->dispatch((PaxosServiceMessage*)m);
-
-	// make sure service finds out about any state changes
-	if (paxos->is_active()) {
-	  vector<PaxosService*>::iterator service_it = paxos_service.begin();
-	  for ( ; service_it != paxos_service.end(); ++service_it)
-            (*service_it)->update_cached_versions();
-	    (*service_it)->update_from_paxos();
-	}
       }
       break;
 

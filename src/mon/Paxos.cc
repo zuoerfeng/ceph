@@ -514,6 +514,7 @@ void Paxos::begin(bufferlist& v)
     finish_contexts(g_ceph_context, waiting_for_commit);
     finish_contexts(g_ceph_context, waiting_for_readable);
     finish_contexts(g_ceph_context, waiting_for_writeable);
+    mon->finish_paxos_proposal();
 
     return;
   }
@@ -635,6 +636,7 @@ void Paxos::handle_accept(MMonPaxos *accept)
     finish_contexts(g_ceph_context, waiting_for_commit);
     finish_contexts(g_ceph_context, waiting_for_readable);
     finish_contexts(g_ceph_context, waiting_for_writeable);
+    mon->finish_paxos_proposal();
   }
   accept->put();
 }
@@ -713,10 +715,12 @@ void Paxos::handle_commit(MMonPaxos *commit)
   }
 
   store_state(commit);
-  
+
   commit->put();
 
   finish_contexts(g_ceph_context, waiting_for_commit);
+
+  mon->finish_paxos_proposal();
 }
 
 void Paxos::extend_lease()

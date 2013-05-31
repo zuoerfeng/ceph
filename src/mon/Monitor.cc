@@ -518,8 +518,7 @@ void Monitor::init_paxos()
   // update paxos
   for (int i = 0; i < PAXOS_NUM; ++i) {
     if (paxos->is_consistent()) {
-      paxos_service[i]->update_cached_versions();
-      paxos_service[i]->update_from_paxos();
+      paxos_service[i]->refresh();
     }
   }
 

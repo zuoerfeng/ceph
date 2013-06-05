@@ -5273,12 +5273,18 @@ void ReplicatedPG::submit_push_data(
   map<string, bufferlist> &omap_entries,
   ObjectStore::Transaction *t)
 {
+  coll_t target_coll;
+  if (first && complete)
+    target_coll = coll;
+  else
+    target_coll = get_temp_coll(t);
+
   if (first) {
     pg_log.revise_have(recovery_info.soid, eversion_t());
     remove_snap_mapped_object(*t, recovery_info.soid);
-    t->remove(get_temp_coll(t), recovery_info.soid);
-    t->touch(get_temp_coll(t), recovery_info.soid);
-    t->omap_setheader(get_temp_coll(t), recovery_info.soid, omap_header);
+    t->remove(target_coll, recovery_info.soid);
+    t->touch(target_coll, recovery_info.soid);
+    t->omap_setheader(target_coll, recovery_info.soid, omap_header);
   }
   uint64_t off = 0;
   for (interval_set<uint64_t>::const_iterator p = intervals_included.begin();
@@ -5286,24 +5292,27 @@ void ReplicatedPG::submit_push_data(
        ++p) {
     bufferlist bit;
     bit.substr_of(data_included, off, p.get_len());
-    t->write(get_temp_coll(t), recovery_info.soid,
+    t->write(target_coll, recovery_info.soid,
 	     p.get_start(), p.get_len(), bit);
     off += p.get_len();
   }
 
-  t->omap_setkeys(get_temp_coll(t), recovery_info.soid,
+  t->omap_setkeys(target_coll, recovery_info.soid,
 		  omap_entries);
-  t->setattrs(get_temp_coll(t), recovery_info.soid,
+  t->setattrs(target_coll, recovery_info.soid,
 	      attrs);
 
-  if (complete)
+  if (complete) {
+    if (!first)
+      t->collection_move(coll, target_coll, recovery_info.soid);
+
     submit_push_complete(recovery_info, t);
+  }
 }
 
 void ReplicatedPG::submit_push_complete(ObjectRecoveryInfo &recovery_info,
 					ObjectStore::Transaction *t)
 {
-  t->collection_move(coll, get_temp_coll(t), recovery_info.soid);
   for (map<hobject_t, interval_set<uint64_t> >::const_iterator p =
 	 recovery_info.clone_subset.begin();
        p != recovery_info.clone_subset.end();

@@ -5263,8 +5263,9 @@ int ReplicatedPG::send_pull(int prio, int peer,
 }
 
 void ReplicatedPG::submit_push_data(
-  const ObjectRecoveryInfo &recovery_info,
+  ObjectRecoveryInfo &recovery_info,
   bool first,
+  bool complete,
   const interval_set<uint64_t> &intervals_included,
   bufferlist data_included,
   bufferlist omap_header,
@@ -5294,6 +5295,9 @@ void ReplicatedPG::submit_push_data(
 		  omap_entries);
   t->setattrs(get_temp_coll(t), recovery_info.soid,
 	      attrs);
+
+  if (complete)
+    submit_push_complete(recovery_info, t);
 }
 
 void ReplicatedPG::submit_push_complete(ObjectRecoveryInfo &recovery_info,
@@ -5448,7 +5452,7 @@ void ReplicatedPG::handle_pull_response(OpRequestRef op)
   Context *onreadable = 0;
   Context *onreadable_sync = 0;
   Context *oncomplete = 0;
-  submit_push_data(pi.recovery_info, first,
+  submit_push_data(pi.recovery_info, first, complete,
 		   data_included, data,
 		   m->omap_header,
 		   m->attrset,
@@ -5458,7 +5462,6 @@ void ReplicatedPG::handle_pull_response(OpRequestRef op)
   info.stats.stats.sum.num_keys_recovered += m->omap_entries.size();
 
   if (complete) {
-    submit_push_complete(pi.recovery_info, t);
     info.stats.stats.sum.num_objects_recovered++;
 
     SnapSetContext *ssc;
@@ -5546,15 +5549,13 @@ void ReplicatedPG::handle_push(OpRequestRef op)
   Context *onreadable_sync = 0;
   submit_push_data(m->recovery_info,
 		   first,
+		   complete,
 		   m->data_included,
 		   data,
 		   m->omap_header,
 		   m->attrset,
 		   m->omap_entries,
 		   t);
-  if (complete)
-    submit_push_complete(m->recovery_info,
-			 t);
 
   int r = osd->store->
     queue_transaction(

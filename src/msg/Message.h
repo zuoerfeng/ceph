@@ -182,8 +182,9 @@ struct Connection : private RefCountedObject {
   friend class boost::intrusive_ptr<Connection>;
 
 public:
-  Connection(Messenger *m)
-    : lock("Connection::lock"),
+  Connection(CephContext *cct, Messenger *m)
+    : RefCountedObject(cct),
+      lock("Connection::lock"),
       msgr(m),
       priv(NULL),
       peer_type(-1),

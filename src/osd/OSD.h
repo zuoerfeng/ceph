@@ -698,7 +698,7 @@ public:
     ConnectionRef con;
     WatchConState wstate;
 
-    Session() : auid(-1), last_sent_epoch(0), con(0) {}
+    Session(CephContext *cct=NULL) : RefCountedObject(cct), auid(-1), last_sent_epoch(0), con(0) {}
   };
 
 private:

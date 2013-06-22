@@ -563,37 +563,44 @@ EOF
 		    $CEPH_BIN/radosgw-admin user create --uid tester --access-key $akey --secret $skey --display-name 'M. Tester' --email tester@ceph.com
 
 		    swiftuser='tester2:swift-tester'
+		    swiftuser2='tester3:swift-tester-foo'
 		    swiftpass='swift-password'
+		    swiftemail='swift-tester@ceph.com'
+		    swiftemail2='swift-tester-foo@ceph.com'
 		    echo swift user $swiftuser
 		    echo swift pass $swiftpass
 		    $CEPH_BIN/radosgw-admin user create --subuser $swiftuser --display-name 'swift tester' --secret $swiftpass --email swift-tester@ceph.com
+		    $CEPH_BIN/radosgw-admin user create --subuser $swiftuser2 --display-name 'swift tester2' --secret $swiftpass --email swift-tester-foo@ceph.com
 
 		    cat <<EOF > swift-test.conf
 [func_test]
 auth_port = $rgwport
 auth_prefix = /auth/
 auth_ssl = no
+auth_host = localhost
+
 account = tester2
 username = swift-tester
-email = swift-tester@ceph.com
+email = $swiftemail
 display_name = Mr. foo.client.0 foo
-password = 4v9cvPf5xq1hbUKjiZG/xWrnDvFA+gjDOz59Ai2h0ylW6I45eboZUA==
-account2 = bar.client.0
-username2 = bar
-email2 = bar.client.0+test@test.test
-display_name2 = Mr. bar.client.0 bar
-password2 = rNkOGis3xaLUJ30HpgDI6Cq7nXyJ3ngrMS431zUavxnvDwLsBjjyjA==
-auth_host = mira067.front.sepia.ceph.com
+password = $swiftpass
+
+account2 = tester3
+username2 = swift-tester-foo
+email2 = $swiftemail2
+display_name2 = Mr. foo.client.0 foo fooo
+password2 = $swiftpass
 
 EOF
 
-		    echo SWIFT_TEST_CONFIG_FILE='swift-test.conf' ../../swift/virtualenv/bin/nosetests \
-			-w ../../swift/test/functional -v -a '!fails_on_rgw'
+		    echo SWIFT_TEST_CONFIG_FILE='$PWD/swift-test.conf' ../../swift/virtualenv/bin/nosetests \
+			-w ../../swift/test/functional -v -a \\\!fails_on_rgw
 
 	    fi
 	fi
 	echo start rgw$rgw on http://localhost:$rgwport
-	run 'rgw' $SUDO $CEPH_BIN/radosgw -n client.radosgw.rgw$rgw $ARGS
+	LD_LIBRARY_PATH=.libs
+	run 'rgw' $CEPH_BIN/.libs/lt-radosgw -n client.radosgw.rgw$rgw $ARGS
 	run 'apache2' $SUDO apache2 -f $PWD/out/apache.conf
     done
 fi

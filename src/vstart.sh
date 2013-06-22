@@ -104,6 +104,11 @@ case $1 in
 	    valgrind_mon=$2
 	    shift
 	    ;;
+    --valgrind_rgw )
+	    [ -z "$2" ] && usage_exit
+	    valgrind_rgw=$2
+	    shift
+	    ;;
     --nodaemon )
 	    nodaemon=1
 	    ;;
@@ -556,6 +561,35 @@ EOF
 		    echo access key $akey
 		    echo secret key $skey
 		    $CEPH_BIN/radosgw-admin user create --uid tester --access-key $akey --secret $skey --display-name 'M. Tester' --email tester@ceph.com
+
+		    swiftuser='tester2:swift-tester'
+		    swiftpass='swift-password'
+		    echo swift user $swiftuser
+		    echo swift pass $swiftpass
+		    $CEPH_BIN/radosgw-admin user create --subuser $swiftuser --display-name 'swift tester' --secret $swiftpass --email swift-tester@ceph.com
+
+		    cat <<EOF > swift-test.conf
+[func_test]
+auth_port = $rgwport
+auth_prefix = /auth/
+auth_ssl = no
+account = tester2
+username = swift-tester
+email = swift-tester@ceph.com
+display_name = Mr. foo.client.0 foo
+password = 4v9cvPf5xq1hbUKjiZG/xWrnDvFA+gjDOz59Ai2h0ylW6I45eboZUA==
+account2 = bar.client.0
+username2 = bar
+email2 = bar.client.0+test@test.test
+display_name2 = Mr. bar.client.0 bar
+password2 = rNkOGis3xaLUJ30HpgDI6Cq7nXyJ3ngrMS431zUavxnvDwLsBjjyjA==
+auth_host = mira067.front.sepia.ceph.com
+
+EOF
+
+		    echo SWIFT_TEST_CONFIG_FILE='swift-test.conf' ../../swift/virtualenv/bin/nosetests \
+			-w ../../swift/test/functional -v -a '!fails_on_rgw'
+
 	    fi
 	fi
 	echo start rgw$rgw on http://localhost:$rgwport

@@ -78,4 +78,5 @@ noinst_HEADERS += \
 	include/rbd/librbd.h \
 	include/rbd/librbd.hpp\
 	include/util.h\
-	include/stat.h
+	include/stat.h\
+	include/spinlock.h

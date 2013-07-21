@@ -32,7 +32,7 @@ libcommon_la_SOURCES = \
 	common/RefCountedObj.cc \
 	common/blkdev.cc \
 	common/common_init.cc \
-	common/pipe.c \
+	common/pipe_util.c \
 	common/ceph_argparse.cc \
 	common/ceph_context.cc \
 	common/buffer.cc \
@@ -166,7 +166,7 @@ noinst_HEADERS += \
 	common/arch.h \
 	common/armor.h \
 	common/common_init.h \
-	common/pipe.h \
+	common/pipe_util.h \
 	common/code_environment.h \
 	common/signal.h \
 	common/simple_spin.h \

@@ -17,6 +17,8 @@
 #error "Your platform is not yet supported."
 #endif
 
+#include "include/inttypes.h"
+
 #if defined(__FreeBSD__) || defined(DARWIN)
 #define	__BYTE_ORDER _BYTE_ORDER
 #define	__BIG_ENDIAN _BIG_ENDIAN

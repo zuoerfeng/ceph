@@ -7,6 +7,7 @@
  */
 
 #include "msgr.h"
+#include "include/inttypes.h"
 
 /*
  * fs id

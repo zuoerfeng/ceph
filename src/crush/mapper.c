@@ -16,6 +16,7 @@
 # define dprintk(args...) /* printf(args) */
 # define kmalloc(x, f) malloc(x)
 # define kfree(x) free(x)
+# include "include/inttypes.h"
 #endif
 
 #include "crush.h"

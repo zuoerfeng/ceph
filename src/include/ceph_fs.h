@@ -14,6 +14,7 @@
 
 #include "msgr.h"
 #include "rados.h"
+#include "include/inttypes.h"
 
 /*
  * subprotocol versions.  when specific messages types or high-level

@@ -11,11 +11,13 @@
 #include <endian.h>
 #elif defined(__FreeBSD__)
 #include <sys/endian.h>
+#elif defined(DARWIN)
+#include <machine/endian.h>
 #else
 #error "Your platform is not yet supported."
 #endif
 
-#if defined(__FreeBSD__)
+#if defined(__FreeBSD__) || defined(DARWIN)
 #define	__BYTE_ORDER _BYTE_ORDER
 #define	__BIG_ENDIAN _BIG_ENDIAN
 #define	__LITTLE_ENDIAN _LITTLE_ENDIAN

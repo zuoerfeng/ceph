@@ -44,6 +44,8 @@ __FBSDID("$FreeBSD: src/sys/netinet/sctp_crc32.c,v 1.8 2007/05/08 17:01:10 rrs E
 
 #if defined(__FreeBSD__)
 #include <sys/endian.h>
+#elif defined(__APPLE__)
+#include <machine/endian.h>
 #else
 #include <endian.h>
 #endif

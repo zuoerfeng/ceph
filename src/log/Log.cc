@@ -13,6 +13,7 @@
 #include "common/safe_io.h"
 #include "common/Clock.h"
 #include "include/assert.h"
+#include "include/compat.h"
 
 #define DEFAULT_MAX_NEW    100
 #define DEFAULT_MAX_RECENT 10000
@@ -87,7 +88,11 @@ void Log::set_flush_on_exit()
   // assume that exit() won't race with ~Log().
   if (m_indirect_this == NULL) {
     m_indirect_this = new (Log*)(this);
+#ifdef HAVE_ON_EXIT
     on_exit(log_on_exit, m_indirect_this);
+#else
+# warning "Flush on exit not implemented. Need atexit."
+#endif
   }
 }
 

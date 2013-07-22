@@ -123,7 +123,7 @@ AX_C_PRETTY_FUNC
 ACX_PTHREAD
 AC_SEARCH_LIBS([uuid_parse], [uuid], [], AC_MSG_FAILURE([no uuid library found]))
 AC_CHECK_LIB([m], [pow], [true], AC_MSG_FAILURE([libm not found]))
-AC_CHECK_LIB([resolv], [__res_nquery], [true], AC_MSG_FAILURE([libresolv not found]))
+#AC_CHECK_LIB([resolv], [__res_nquery], [true], AC_MSG_FAILURE([libresolv not found]))
 if test x"$linux" = x"yes"; then
 	AC_CHECK_LIB([keyutils], [add_key], [true], AC_MSG_FAILURE([libkeyutils not found]))
 fi
@@ -582,6 +582,11 @@ AC_CHECK_FUNC([pthread_spin_init],
   [AC_DEFINE(HAVE_PTHREAD_SPINLOCK, 1, [Define if you have pthread_spin_init])])
 LIBS="$saved_LIBS"
 CFLAGS="$saved_CFLAGS"
+
+AC_CHECK_FUNCS([on_exit])
+
+AC_CHECK_HEADERS([stdint.h sys/types.h linux/types.h])
+AC_CHECK_HEADERS([sys/vfs.h sys/param.h sys/mount.h])h
 
 AC_CHECK_TYPES(int8_t)
 AC_CHECK_TYPES(uint8_t)

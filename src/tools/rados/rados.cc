@@ -41,6 +41,8 @@ using namespace librados;
 #include <climits>
 #include <locale>
 
+#include "include/compat.h"
+
 #include "cls/lock/cls_lock_client.h"
 
 int rados_tool_sync(const std::map < std::string, std::string > &opts,

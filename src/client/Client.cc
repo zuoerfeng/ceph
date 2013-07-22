@@ -5692,9 +5692,11 @@ int Client::_read(Fh *f, int64_t offset, uint64_t size, bufferlist *bl)
   if (!conf->client_debug_force_sync_read &&
       (cct->_conf->client_oc && (have & CEPH_CAP_FILE_CACHE))) {
 
+#ifndef DARWIN 
     if (f->flags & O_RSYNC) {
       _flush_range(in, offset, size);
     }
+#endif
     r = _read_async(f, offset, size, bl);
   } else {
     r = _read_sync(f, offset, size, bl);

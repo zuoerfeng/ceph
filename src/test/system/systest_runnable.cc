@@ -31,6 +31,8 @@
 #include <unistd.h>
 #include <vector>
 
+#include "acconfig.h"
+
 #if defined(__FreeBSD__)
 #include <pthread_np.h>
 #endif
@@ -42,8 +44,14 @@ static pid_t do_gettid(void)
 {
 #if defined(__linux__)
   return static_cast < pid_t >(syscall(SYS_gettid));
-#else
+#elif defined(__FreeBSD__)
   return static_cast < pid_t >(pthread_getthreadid_np());
+#elif defined(DARWIN)
+  uint64_t tid;
+  pthread_threadid_np(NULL, &tid);
+  return static_cast < pid_t >(tid);
+#else
+# error "no thread id query function"
 #endif
 }
 

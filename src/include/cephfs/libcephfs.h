@@ -22,7 +22,7 @@
 #include <sys/socket.h>
 
 // FreeBSD compatibility
-#ifdef __FreeBSD__
+#if defined(__FreeBSD__) || defined(__APPLE__)
 typedef off_t loff_t;
 typedef off_t off64_t;
 #endif
@@ -34,7 +34,7 @@ extern "C" {
 /*
  * On FreeBSD the offset is 64 bit, but libc doesn't announce it in the way glibc does.
  */
-#if !defined(__FreeBSD__) && !defined(__USE_FILE_OFFSET64)
+#if !defined(__FreeBSD__) && !defined(__APPLE__) && !defined(__USE_FILE_OFFSET64)
 # error libceph: must define __USE_FILE_OFFSET64 or readdir results will be corrupted
 #endif
 

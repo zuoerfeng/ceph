@@ -1920,7 +1920,11 @@ int Pipe::do_sendmsg(struct msghdr *msg, int len, bool more)
       assert(l == len);
     }
 
+#ifdef MSG_MORE
     int r = ::sendmsg(sd, msg, MSG_NOSIGNAL | (more ? MSG_MORE : 0));
+#else
+    int r = ::sendmsg(sd, msg, MSG_NOSIGNAL);
+#endif
     if (r == 0) 
       ldout(msgr->cct,10) << "do_sendmsg hmm do_sendmsg got r==0!" << dendl;
     if (r < 0) { 

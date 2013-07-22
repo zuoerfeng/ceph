@@ -11,6 +11,8 @@
  * Foundation.  See file COPYING.
  * 
  */
+#include <sys/mount.h>
+#include <sys/param.h>
 #include <iostream>
 #include <string>
 #include <map>

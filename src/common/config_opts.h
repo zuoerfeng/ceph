@@ -251,6 +251,7 @@ OPTION(client_debug_force_sync_read, OPT_BOOL, false)     // always read synchro
 OPTION(client_debug_inject_tick_delay, OPT_INT, 0) // delay the client tick for a number of seconds
 // note: the max amount of "in flight" dirty data is roughly (max - target)
 OPTION(fuse_use_invalidate_cb, OPT_BOOL, false) // use fuse 2.8+ invalidate callback to keep page cache consistent
+OPTION(fuse_use_dentry_invalidate_cb, OPT_BOOL, true) // use fuse 2.8+ invalidate callback to release unlinked inodes
 OPTION(fuse_allow_other, OPT_BOOL, true)
 OPTION(fuse_default_permissions, OPT_BOOL, true)
 OPTION(fuse_big_writes, OPT_BOOL, true)

@@ -717,7 +717,8 @@ int CephFuse::Handle::init(int argc, const char *argv[])
 
   client->ll_register_getgroups_cb(getgroups_cb, this);
 
-  client->ll_register_dentry_invalidate_cb(dentry_invalidate_cb, this);
+  if (g_conf->fuse_use_dentry_invalidate_cb)
+    client->ll_register_dentry_invalidate_cb(dentry_invalidate_cb, this);
 
   if (g_conf->fuse_use_invalidate_cb)
     client->ll_register_ino_invalidate_cb(ino_invalidate_cb, this);

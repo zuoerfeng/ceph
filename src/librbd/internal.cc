@@ -1648,10 +1648,10 @@ reprotect_and_return_err:
     vector<parent_info> snap_parents;
     vector<uint8_t> snap_protection;
     {
-      RWLock::WLocker l(ictx->snap_lock);
+      //RWLock::WLocker l(ictx->snap_lock);
       {
         int r;
-	RWLock::WLocker l2(ictx->parent_lock);
+	//RWLock::WLocker l2(ictx->parent_lock);
 	ictx->lockers.clear();
 	if (ictx->old_format) {
 	  r = read_header(ictx->md_ctx, ictx->header_oid, &ictx->header, NULL);

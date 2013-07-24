@@ -20,7 +20,16 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <dirent.h>
+
+#include "acconfig.h"
+
+#ifdef HAVE_SYS_XATTR_H
 #include <sys/xattr.h>
+#endif
+
+#ifdef HAVE_SYS_EXTATTR_H
+#include <sys/extattr.h>
+#endif
 
 TEST(LibCephFS, OpenEmptyComponent) {
 

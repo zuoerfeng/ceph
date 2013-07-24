@@ -5,6 +5,8 @@
 #include <errno.h>
 #include "gtest/gtest.h"
 
+#include "include/compat.h"
+
 using namespace librados;
 using std::string;
 

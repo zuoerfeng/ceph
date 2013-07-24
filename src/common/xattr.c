@@ -18,6 +18,9 @@
 
 #include "acconfig.h"
 
+#include <errno.h>
+#include <stdlib.h>
+
 /*
  * The original FreeBSD port below (now guarded by HAVE_EXTATTR) was using
  * FreeBSD specific string manipulation routines.
@@ -156,7 +159,7 @@ ssize_t ceph_os_fgetxattr(int fd, const char *name, void *value, size_t size)
 
 ssize_t ceph_os_listxattr(const char *path, char *list, size_t size)
 {
-	ssize_t error;
+	ssize_t error = 0;
 
 #ifdef HAVE_EXTATTR
 	/*
@@ -206,7 +209,7 @@ ssize_t ceph_os_listxattr(const char *path, char *list, size_t size)
 
 ssize_t ceph_os_flistxattr(int fd, char *list, size_t size)
 {
-	ssize_t error;
+	ssize_t error = 0;
 
 #ifdef HAVE_EXTATTR
 	/*

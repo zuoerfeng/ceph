@@ -95,6 +95,8 @@
 
 #include "common/Timer.h"
 
+#include "include/compat.h"
+
 using namespace std;
 
 extern struct ceph_file_layout g_default_file_layout;

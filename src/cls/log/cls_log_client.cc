@@ -4,6 +4,7 @@
 #include "cls/log/cls_log_ops.h"
 #include "include/rados/librados.hpp"
 
+#include "include/compat.h"
 
 using namespace librados;
 

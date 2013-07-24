@@ -15,6 +15,8 @@
 #include "include/assert.h"
 #include "include/compat.h"
 
+#include "include/compat.h"
+
 #define DEFAULT_MAX_NEW    100
 #define DEFAULT_MAX_RECENT 10000
 

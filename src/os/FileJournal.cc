@@ -33,6 +33,9 @@
 
 #include "common/blkdev.h"
 
+#ifndef O_DSYNC
+# define O_DSYNC 0
+#endif
 
 #define dout_subsys ceph_subsys_journal
 #undef dout_prefix

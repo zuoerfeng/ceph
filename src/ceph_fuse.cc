@@ -32,7 +32,7 @@ using namespace std;
 #include "global/global_init.h"
 #include "common/safe_io.h"
        
-#ifndef DARWIN
+#if !defined(DARWIN) && !defined(__FreeBSD__)
 #include <envz.h>
 #endif // DARWIN
 

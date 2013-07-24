@@ -29,6 +29,9 @@
 #include <boost/random/binomial_distribution.hpp>
 #include <gtest/gtest.h>
 
+#include <sys/param.h>
+#include <sys/mount.h>
+
 #include <ext/hash_map>
 using __gnu_cxx::hash_map;
 typedef boost::mt11213b gen_type;

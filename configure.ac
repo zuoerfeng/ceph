@@ -8,16 +8,20 @@ AC_PREREQ(2.59)
 # VERSION define is not used by the code.  It gets a version string
 # from 'git describe'; see src/ceph_ver.[ch]
 
-AC_INIT([ceph], [0.67-rc1], [ceph-devel@vger.kernel.org])
+AC_INIT([ceph], [0.67], [ceph-devel@vger.kernel.org])
 
 # Create release string.  Used with VERSION for RPMs.
 RPM_RELEASE=0
+RPM_RELEASE_CANDIDATE="rc1"  # blank if not a release candidate
 AC_SUBST(RPM_RELEASE)
 if test -d ".git" ; then
   AC_CHECK_PROG(GIT_CHECK, git, yes)
   if test x"$GIT_CHECK" = x"yes"; then
     RPM_RELEASE=`if expr index $(git describe --always) '-' > /dev/null ; then git describe --always | cut -d- -f2- | tr '-' '.' ; else echo "0"; fi`
   fi
+fi
+if test -n "$RPM_RELEASE_CANDIDATE" ; then
+    RPM_RELEASE=$RPM_RELEASE_CANDIDATE.$RPM_RELEASE
 fi
 AC_MSG_NOTICE([RPM_RELEASE='$RPM_RELEASE'])
 

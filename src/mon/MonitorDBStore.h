@@ -230,6 +230,7 @@ class MonitorDBStore
       bl.write_fd(dump_fd);
     }
 
+    list<pair<string, string> > removed;
     list<pair<string, pair<string,string> > > compact;
     for (list<Op>::const_iterator it = t.ops.begin(); it != t.ops.end(); ++it) {
       const Op& op = *it;
@@ -239,6 +240,7 @@ class MonitorDBStore
 	break;
       case Transaction::OP_ERASE:
 	dbt->rmkey(op.prefix, op.key);
+	removed.push_back(make_pair(op.prefix, op.key));
 	break;
       case Transaction::OP_COMPACT:
 	compact.push_back(make_pair(op.prefix, make_pair(op.key, op.endkey)));
@@ -258,6 +260,13 @@ class MonitorDBStore
 	else
 	  db->compact_range_async(compact.front().first, compact.front().second.first, compact.front().second.second);
 	compact.pop_front();
+      }
+
+      while (!removed.empty()) {
+	if (exists(removed.front().first, removed.front().second)) {
+	  derr << __func__ << " removed key " << removed.front() << " did not go away" << dendl;
+	  assert(0 == "wtf");
+	}
       }
     }
     return r;

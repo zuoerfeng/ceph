@@ -1978,10 +1978,6 @@ void Monitor::handle_command(MMonCommand *m)
     return;
   }
 
-  bool access_cmd;
-  bool access_r;
-  bool access_all;
-
   string module;
   string err;
 
@@ -1993,10 +1989,6 @@ void Monitor::handle_command(MMonCommand *m)
 
   get_str_vec(prefix, fullcmd);
   module = fullcmd[0];
-
-  access_cmd = _allowed_command(session, cmdmap);
-  access_r = (session->is_capable("mon", MON_CAP_R) || access_cmd);
-  access_all = (session->caps.is_allow_all() || access_cmd);
 
   if (!_allowed_command(session, module, prefix, cmdmap)) {
     dout(1) << __func__ << " access denied" << dendl;
@@ -2030,11 +2022,6 @@ void Monitor::handle_command(MMonCommand *m)
   }
 
   if (module == "config-key") {
-    if (!access_all) {
-      r = -EACCES;
-      rs = "access denied";
-      goto out;
-    }
     config_key_service->dispatch(m);
     return;
   }
@@ -2066,11 +2053,6 @@ void Monitor::handle_command(MMonCommand *m)
   }
 
   if (prefix == "compact") {
-    if (!access_all) {
-      r = -EACCES;
-      rs = "access denied";
-      goto out;
-    }
     dout(1) << "triggering manual compaction" << dendl;
     utime_t start = ceph_clock_now(g_ceph_context);
     store->compact();
@@ -2083,11 +2065,6 @@ void Monitor::handle_command(MMonCommand *m)
     r = 0;
   }
   else if (prefix == "injectargs") {
-    if (!access_all) {
-      r = -EACCES;
-      rs = "access denied";
-      goto out;
-    }
     vector<string> injected_args;
     cmd_getval(g_ceph_context, cmdmap, "injected_args", injected_args);
     if (!injected_args.empty()) {
@@ -2107,12 +2084,6 @@ void Monitor::handle_command(MMonCommand *m)
   } else if (prefix == "status" ||
 	     prefix == "health" ||
 	     prefix == "df") {
-    if (!access_r) {
-      r = -EACCES;
-      rs = "access denied";
-      goto out;
-    }
-
     string detail;
     cmd_getval(g_ceph_context, cmdmap, "detail", detail);
 
@@ -2163,11 +2134,6 @@ void Monitor::handle_command(MMonCommand *m)
     rs = "";
     r = 0;
   } else if (prefix == "report") {
-    if (!access_r) {
-      r = -EACCES;
-      rs = "access denied";
-      goto out;
-    }
 
     // this must be formatted, in its current form
     if (!f)
@@ -2206,11 +2172,6 @@ void Monitor::handle_command(MMonCommand *m)
     rs = ss2.str();
     r = 0;
   } else if (prefix == "quorum_status") {
-    if (!access_r) {
-      r = -EACCES;
-      rs = "access denied";
-      goto out;
-    }
     // make sure our map is readable and up to date
     if (!is_leader() && !is_peon()) {
       dout(10) << " waiting for quorum" << dendl;
@@ -2222,11 +2183,6 @@ void Monitor::handle_command(MMonCommand *m)
     rs = "";
     r = 0;
   } else if (prefix == "mon_status") {
-    if (!access_r) {
-      r = -EACCES;
-      rs = "access denied";
-      goto out;
-    }
     _mon_status(f.get(), ds);
     rdata.append(ds);
     rs = "";
@@ -2247,11 +2203,6 @@ void Monitor::handle_command(MMonCommand *m)
     rs = ds.str();
     r = 0;
   } else if (prefix == "heap") {
-    if (!access_all) {
-      r = -EACCES;
-      rs = "access denied";
-      goto out;
-    }
     if (!ceph_using_tcmalloc())
       rs = "tcmalloc not enabled, can't use heap profiler commands\n";
     else {
@@ -2266,11 +2217,6 @@ void Monitor::handle_command(MMonCommand *m)
       r = 0;
     }
   } else if (prefix == "quorum") {
-    if (!access_all) {
-      r = -EACCES;
-      rs = "access denied";
-      goto out;
-    }
     string quorumcmd;
     cmd_getval(g_ceph_context, cmdmap, "quorumcmd", quorumcmd);
     if (quorumcmd == "exit") {
@@ -2284,9 +2230,6 @@ void Monitor::handle_command(MMonCommand *m)
       rs = "started responding to quorum, initiated new election";
       r = 0;
     }
-  } else if (!access_cmd) {
-    r = -EACCES;
-    rs = "access denied";
   }
 
  out:

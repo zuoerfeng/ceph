@@ -738,37 +738,116 @@ bool AuthMonitor::prepare_command(MMonCommand *m)
     wait_for_finished_proposal(new Monitor::C_Command(mon, m, 0, rs, get_last_committed()));
     //paxos->wait_for_commit(new Monitor::C_Command(mon, m, 0, rs, get_last_committed()));
     return true;
-  } else if (prefix == "auth add") {
+  } else if (prefix == "auth add" && !entity_name.empty()) {
+    /* expected behavior:
+     *  - if command reproduces current state, return 0.
+     *  - if command adds brand new entity, handle it.
+     *  - if command adds new state to existing entity, return error.
+     */
     KeyServerData::Incremental auth_inc;
     auth_inc.name = entity;
     bufferlist bl = m->get_data();
-    dout(10) << "AuthMonitor::prepare_command bl.length()=" << bl.length() << dendl;
-    if (bl.length()) {
+    bool has_keyring = (bl.length() > 0);
+    map<string,bufferlist> new_caps;
+
+    KeyRing new_keyring;
+    if (has_keyring) {
       bufferlist::iterator iter = bl.begin();
-      KeyRing keyring;
       try {
-	::decode(keyring, iter);
+        ::decode(new_keyring, iter);
       } catch (const buffer::error &ex) {
-	ss << "error decoding keyring";
-	err = -EINVAL;
-	goto done;
+        ss << "error decoding keyring";
+        err = -EINVAL;
+        goto done;
       }
-      if (!keyring.get_auth(auth_inc.name, auth_inc.auth)) {
-	ss << "key for " << auth_inc.name << " not found in provided keyring";
-	err = -EINVAL;
-	goto done;
-      }
-    } else {
-      // generate a new random key
-      dout(10) << "AuthMonitor::prepare_command generating random key for " << auth_inc.name << dendl;
-      auth_inc.auth.key.create(g_ceph_context, CEPH_CRYPTO_AES);
     }
 
-    auth_inc.op = KeyServerData::AUTH_INC_ADD;
-
+    // build new caps from provided arguments (if available)
     for (vector<string>::iterator it = caps_vec.begin();
-	 it != caps_vec.end(); it += 2)
-      ::encode(*(it+1), auth_inc.auth.caps[*it]);
+        it != caps_vec.end(); it += 2) {
+      string sys = *it;
+      bufferlist cap;
+      ::encode(*(it+1), cap);
+      new_caps[sys] = cap;
+    }
+
+    if (mon->key_server.get_auth(auth_inc.name, auth_inc.auth)) {
+      // we already have this entity; let us check if the key match
+      if (has_keyring) {
+        EntityAuth new_inc;
+        if (!new_keyring.get_auth(auth_inc.name, new_inc)) {
+          ss << "key for " << auth_inc.name
+             << " not found in provided keyring";
+          err = -EINVAL;
+          goto done;
+        }
+
+        if (auth_inc.auth.key.get_secret().cmp(new_inc.key.get_secret())
+            || (new_inc.caps.size() > 0
+              && new_inc.caps.size() != auth_inc.auth.caps.size()))
+        {
+          // key exists but does not match
+          ss << "entity " << auth_inc.name
+             << " exists but does not match the provided keyring";
+          err = -EINVAL;
+          goto done;
+         } else if (new_inc.caps.size() > 0) {
+           // add keyring's caps to the new_caps map
+           for (map<string,bufferlist>::iterator it = new_inc.caps.begin();
+                it != new_inc.caps.end(); ++it) {
+             new_caps[it->first] = it->second;
+           }
+         }
+      }
+
+      // check if caps match.  If so, return 0; otherwise return -EINVAL
+      for (map<string,bufferlist>::iterator it = new_caps.begin();
+          it != new_caps.end(); ++it) {
+        string sys = it->first;
+        bufferlist &cap = it->second;
+
+        if (auth_inc.auth.caps.count(sys) == 0
+            || !auth_inc.auth.caps[sys].contents_equal(cap)) {
+          ss << "entity " << auth_inc.name << " exists but cap "
+            << sys << " does not match";
+          err = -EINVAL;
+          goto done;
+        }
+      }
+      // caps match; return.
+      err = 0;
+      goto done;
+    }
+
+    // are we about to have it?
+    for (vector<Incremental>::iterator p = pending_auth.begin();
+        p != pending_auth.end();
+        ++p) {
+      if (p->inc_type == AUTH_DATA) {
+        KeyServerData::Incremental inc;
+        bufferlist::iterator q = p->auth_data.begin();
+        ::decode(inc, q);
+        if (inc.op == KeyServerData::AUTH_INC_ADD &&
+            inc.name == entity) {
+          wait_for_finished_proposal(
+              new Monitor::C_Command(mon, m, 0, rs, get_last_committed()));
+          return true;
+        }
+      }
+    }
+
+    // okay, add it.
+    auth_inc.op = KeyServerData::AUTH_INC_ADD;
+    auth_inc.auth.caps = new_caps;
+
+    // if a key was not provided in the keyring, then generate a new one
+    if (!has_keyring) {
+      dout(10) << "AuthMonitor::prepare_command generating random key for "
+               << auth_inc.name << dendl;
+      auth_inc.auth.key.create(g_ceph_context, CEPH_CRYPTO_AES);
+    } else {
+      assert(new_keyring.get_auth(auth_inc.name, auth_inc.auth));
+    }
 
     dout(10) << " importing " << auth_inc.name << dendl;
     dout(30) << "    " << auth_inc.auth << dendl;

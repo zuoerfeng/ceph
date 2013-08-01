@@ -1,7 +1,7 @@
 /*
  * rbd-fuse
  */
-#define FUSE_USE_VERSION 26
+#define FUSE_USE_VERSION 30
 
 #include <stdio.h>
 #include <stdlib.h>

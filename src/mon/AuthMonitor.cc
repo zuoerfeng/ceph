@@ -762,63 +762,6 @@ bool AuthMonitor::prepare_command(MMonCommand *m)
       }
     }
 
-    // build new caps from provided arguments (if available)
-    for (vector<string>::iterator it = caps_vec.begin();
-        it != caps_vec.end(); it += 2) {
-      string sys = *it;
-      bufferlist cap;
-      ::encode(*(it+1), cap);
-      new_caps[sys] = cap;
-    }
-
-    if (mon->key_server.get_auth(auth_inc.name, auth_inc.auth)) {
-      // we already have this entity; let us check if the key match
-      if (has_keyring) {
-        EntityAuth new_inc;
-        if (!new_keyring.get_auth(auth_inc.name, new_inc)) {
-          ss << "key for " << auth_inc.name
-             << " not found in provided keyring";
-          err = -EINVAL;
-          goto done;
-        }
-
-        if (auth_inc.auth.key.get_secret().cmp(new_inc.key.get_secret())
-            || (new_inc.caps.size() > 0
-              && new_inc.caps.size() != auth_inc.auth.caps.size()))
-        {
-          // key exists but does not match
-          ss << "entity " << auth_inc.name
-             << " exists but does not match the provided keyring";
-          err = -EINVAL;
-          goto done;
-         } else if (new_inc.caps.size() > 0) {
-           // add keyring's caps to the new_caps map
-           for (map<string,bufferlist>::iterator it = new_inc.caps.begin();
-                it != new_inc.caps.end(); ++it) {
-             new_caps[it->first] = it->second;
-           }
-         }
-      }
-
-      // check if caps match.  If so, return 0; otherwise return -EINVAL
-      for (map<string,bufferlist>::iterator it = new_caps.begin();
-          it != new_caps.end(); ++it) {
-        string sys = it->first;
-        bufferlist &cap = it->second;
-
-        if (auth_inc.auth.caps.count(sys) == 0
-            || !auth_inc.auth.caps[sys].contents_equal(cap)) {
-          ss << "entity " << auth_inc.name << " exists but cap "
-            << sys << " does not match";
-          err = -EINVAL;
-          goto done;
-        }
-      }
-      // caps match; return.
-      err = 0;
-      goto done;
-    }
-
     // are we about to have it?
     for (vector<Incremental>::iterator p = pending_auth.begin();
         p != pending_auth.end();
@@ -836,17 +779,77 @@ bool AuthMonitor::prepare_command(MMonCommand *m)
       }
     }
 
+    // build new caps from provided arguments (if available)
+    for (vector<string>::iterator it = caps_vec.begin();
+	 it != caps_vec.end() && (it + 1) != caps_vec.end();
+	 it += 2) {
+      string sys = *it;
+      bufferlist cap;
+      ::encode(*(it+1), cap);
+      new_caps[sys] = cap;
+    }
+
+    // pull info out of provided keyring
+    EntityAuth new_inc;
+    if (has_keyring) {
+      if (!new_keyring.get_auth(auth_inc.name, new_inc)) {
+	ss << "key for " << auth_inc.name
+	   << " not found in provided keyring";
+	err = -EINVAL;
+	goto done;
+      }
+      if (!new_caps.empty() && !new_inc.caps.empty()) {
+	ss << "caps cannot be specified both in keyring and in command";
+	err = -EINVAL;
+	goto done;
+      }
+      if (new_caps.empty()) {
+	new_caps = new_inc.caps;
+      }
+    }
+
+    // does entry already exist?
+    if (mon->key_server.get_auth(auth_inc.name, auth_inc.auth)) {
+      // key match?
+      if (has_keyring) {
+        if (auth_inc.auth.key.get_secret().cmp(new_inc.key.get_secret())) {
+	  ss << "entity " << auth_inc.name << " exists but key does not match";
+	  err = -EINVAL;
+	  goto done;
+	}
+      }
+
+      // caps match?
+      if (new_caps.size() != auth_inc.auth.caps.size()) {
+	ss << "entity " << auth_inc.name << " exists but caps do not match";
+	err = -EINVAL;
+	goto done;
+      }
+      for (map<string,bufferlist>::iterator it = new_caps.begin();
+	   it != new_caps.end(); ++it) {
+        if (auth_inc.auth.caps.count(it->first) == 0 ||
+            !auth_inc.auth.caps[it->first].contents_equal(it->second)) {
+          ss << "entity " << auth_inc.name << " exists but cap "
+	     << it->first << " does not match";
+          err = -EINVAL;
+          goto done;
+        }
+      }
+
+      // they match, no-op
+      err = 0;
+      goto done;
+    }
+
     // okay, add it.
     auth_inc.op = KeyServerData::AUTH_INC_ADD;
     auth_inc.auth.caps = new_caps;
-
-    // if a key was not provided in the keyring, then generate a new one
-    if (!has_keyring) {
+    if (has_keyring) {
+      auth_inc.auth.key = new_inc.key;
+    } else {
       dout(10) << "AuthMonitor::prepare_command generating random key for "
                << auth_inc.name << dendl;
       auth_inc.auth.key.create(g_ceph_context, CEPH_CRYPTO_AES);
-    } else {
-      assert(new_keyring.get_auth(auth_inc.name, auth_inc.auth));
     }
 
     dout(10) << " importing " << auth_inc.name << dendl;

@@ -1901,6 +1901,17 @@ bool Monitor::_allowed_command(MonSession *s, string &module, string &prefix,
        p != cmdmap.end(); ++p) {
     if (p->first == "prefix")
       continue;
+    if (p->first == "caps") {
+      vector<string> cv;
+      if (cmd_getval(g_ceph_context, cmdmap, "caps", cv) &&
+	  cv.size() % 2 == 0) {
+	for (unsigned i = 0; i < cv.size(); i += 2) {
+	  string k = string("caps_") + cv[i];
+	  strmap[k] = cv[i + 1];
+	}
+	continue;
+      }
+    }
     strmap[p->first] = cmd_vartype_stringify(p->second);
   }
 

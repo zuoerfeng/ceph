@@ -61,11 +61,13 @@
 #include "include/types.h"
 #include "common/BackTrace.h"
 
+#include "include/compat.h"
+
 #define dout_subsys ceph_subsys_rgw
 
 using namespace std;
 
-static sighandler_t sighandler_alrm;
+static sig_t sighandler_alrm;
 
 class RGWProcess;
 

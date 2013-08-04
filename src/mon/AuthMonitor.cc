@@ -215,11 +215,13 @@ void AuthMonitor::update_from_paxos(bool *need_bootstrap)
   */
 }
 
-void AuthMonitor::increase_max_global_id()
+void AuthMonitor::increase_max_global_id(uint64_t min)
 {
   assert(mon->is_leader());
-
-  max_global_id += g_conf->mon_globalid_prealloc;
+  assert(g_conf->mon_globalid_prealloc > (int)mon->monmap->size());
+  if (min < max_global_id)
+    min = max_global_id;
+  max_global_id = min + g_conf->mon_globalid_prealloc;
   dout(10) << "increasing max_global_id to " << max_global_id << dendl;
   Incremental inc;
   inc.inc_type = GLOBAL_ID;
@@ -352,9 +354,9 @@ uint64_t AuthMonitor::assign_global_id(MAuth *m, bool should_increase_max)
   bool return_next = (next_global_id <= max_global_id);
 
   // bump the max?
-  while (mon->is_leader() &&
-	 next_global_id >= max_global_id - g_conf->mon_globalid_prealloc / 2) {
-    increase_max_global_id();
+  if (mon->is_leader() &&
+      next_global_id + (g_conf->mon_globalid_prealloc / 2) >= max_global_id) {
+    increase_max_global_id(next_global_id);
   }
 
   if (return_next) {
@@ -878,7 +880,7 @@ done:
 bool AuthMonitor::prepare_global_id(MMonGlobalID *m)
 {
   dout(10) << "AuthMonitor::prepare_global_id" << dendl;
-  increase_max_global_id();
+  increase_max_global_id(0);
 
   m->put();
   return true;

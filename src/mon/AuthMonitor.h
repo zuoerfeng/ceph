@@ -130,7 +130,7 @@ private:
   void update_from_paxos(bool *need_bootstrap);
   void create_pending();  // prepare a new pending
   bool prepare_global_id(MMonGlobalID *m);
-  void increase_max_global_id();
+  void increase_max_global_id(uint64_t next);
   uint64_t assign_global_id(MAuth *m, bool should_increase_max);
   // propose pending update to peers
   void encode_pending(MonitorDBStore::Transaction *t);

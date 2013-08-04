@@ -552,6 +552,7 @@ AC_CHECK_FUNC([extattr_set_fd],
 
 AC_CHECK_FUNCS([posix_fallocate])
 
+AC_CHECK_HEADERS([arpa/nameser_compat.h])
 AC_CHECK_HEADERS([linux/fs.h])
 AC_CHECK_HEADERS([sys/disk.h])
 AC_CHECK_HEADERS([sys/prctl.h])

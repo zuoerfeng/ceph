@@ -149,6 +149,11 @@ void AuthMonitor::update_from_paxos(bool *need_bootstrap)
   while (version > keys_ver) {
     bufferlist bl;
     int ret = get_version(keys_ver+1, bl);
+    if (ret == -ENOENT) {
+      derr << "missing auth inc " << (keys_ver+1) << ", skipping" << dendl;
+      keys_ver++;
+      continue;
+    }
     assert(ret == 0);
     assert(bl.length());
 

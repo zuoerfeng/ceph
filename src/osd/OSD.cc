@@ -2373,9 +2373,14 @@ void OSD::project_pg_history(pg_t pgid, pg_history_t& h, epoch_t from,
            << ", start " << h
            << dendl;
 
+  epoch_t stop = from;
+  if (from < superblock.oldest_map) {
+    stop = superblock.oldest_map;
+    dout(15) << " will stop at first_map " << stop << dendl;
+  }
   epoch_t e;
   for (e = osdmap->get_epoch();
-       e > from;
+       e > stop;
        e--) {
     // verify during intermediate epoch (e-1)
     OSDMapRef oldmap = get_map(e-1);
@@ -2417,8 +2422,8 @@ void OSD::project_pg_history(pg_t pgid, pg_history_t& h, epoch_t from,
   }
 
   // base case: these floors should be the creation epoch if we didn't
-  // find any changes.
-  if (e == h.epoch_created) {
+  // find any changes, or we ran out of map history.
+  if (e == h.epoch_created || from < superblock.oldest_map) {
     if (!h.same_interval_since)
       h.same_interval_since = e;
     if (!h.same_up_since)

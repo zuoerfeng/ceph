@@ -47,8 +47,6 @@ public:
   public:
     version_t version;
     map<pg_t,pg_stat_t> pg_stat_updates;
-    map<int32_t,osd_stat_t> osd_stat_updates;
-    set<int32_t> osd_stat_rm;
     epoch_t osdmap_epoch;
     epoch_t pg_scan;  // osdmap epoch
     set<pg_t> pg_remove;
@@ -56,6 +54,28 @@ public:
     float nearfull_ratio;
     utime_t stamp;
 
+  private:
+    map<int32_t,osd_stat_t> osd_stat_updates;
+    set<int32_t> osd_stat_rm;
+  public:
+    const map<int32_t, osd_stat_t> &get_osd_stat_updates() const {
+      return osd_stat_updates;
+    }
+    const set<int32_t> &get_osd_stat_rm() const {
+      return osd_stat_rm;
+    }
+    void add_stat(int32_t osd, epoch_t epoch, const osd_stat_t &stat) {
+      assert(osd_stat_rm.find(osd) == osd_stat_rm.end());
+      osd_stat_updates.insert(make_pair(osd, stat));
+    void stat_osd_out(int32_t osd) {
+      // 0 the stats for the osd
+      osd_stat_updates.erase(osd);
+      osd_stat_updates[osd];
+    }
+    void rm_stat(int32_t osd) {
+      osd_stat_rm.insert(osd);
+      osd_stat_updates.erase(osd);
+    }
     void encode(bufferlist &bl, uint64_t features=-1) const;
     void decode(bufferlist::iterator &bl);
     void dump(Formatter *f) const;

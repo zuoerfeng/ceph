@@ -195,8 +195,10 @@ void PGMap::apply_incremental(CephContext *cct, const Incremental& inc)
     }
     stat_pg_add(update_pg, update_stat);
   }
-  for (map<int32_t,osd_stat_t>::const_iterator p = inc.osd_stat_updates.begin();
-       p != inc.osd_stat_updates.end();
+  assert(osd_stat.size() == osd_epochs.size());
+  for (map<int32_t,osd_stat_t>::const_iterator p =
+	 inc.get_osd_stat_updates().begin();
+       p != inc.get_osd_stat_updates().end();
        ++p) {
     int osd = p->first;
     const osd_stat_t &new_stats(p->second);
@@ -226,8 +228,8 @@ void PGMap::apply_incremental(CephContext *cct, const Incremental& inc)
     }
   }
   
-  for (set<int>::iterator p = inc.osd_stat_rm.begin();
-       p != inc.osd_stat_rm.end();
+  for (set<int>::iterator p = inc.get_osd_stat_rm().begin();
+       p != inc.get_osd_stat_rm().end();
        ++p) {
     hash_map<int32_t,osd_stat_t>::iterator t = osd_stat.find(*p);
     if (t != osd_stat.end()) {
@@ -488,7 +490,10 @@ void PGMap::dirty_all(Incremental& inc)
     inc.pg_stat_updates[p->first] = p->second;
   }
   for (hash_map<int32_t, osd_stat_t>::const_iterator p = osd_stat.begin(); p != osd_stat.end(); ++p) {
-    inc.osd_stat_updates[p->first] = p->second;
+    assert(inc.get_osd_epochs().count(p->first));
+    inc.add_stat(p->first,
+		 inc.get_osd_epochs().find(p->first)->second,
+		 p->second);
   }
 }
 

@@ -668,15 +668,11 @@ def mount(
         )
     try:
         LOG.debug('Mounting %s on %s with options %s', dev, path, options)
-        subprocess.check_call(
-            args=[
-                'mount',
-                '-o', options,
-                '--',
-                dev,
-                path,
-                ],
-            )
+        args = ['mount']
+        if options:
+            args.extend(['-o', options])
+        args.extend(['--', dev, path])
+        subprocess.check_call(args=args)
     except subprocess.CalledProcessError as e:
         try:
             os.rmdir(path)
@@ -1366,16 +1362,11 @@ def move_mount(
     # /etc/mtab, which *still* isn't a symlink to /proc/mounts despite
     # this being 2013.  Instead, mount the original device at the final
     # location.
-    subprocess.check_call(
-        args=[
-            '/bin/mount',
-            '-o',
-            mount_options,
-            '--',
-            dev,
-            osd_data,
-            ],
-        )
+    args = ['/bin/mount']
+    if mount_options:
+        args.extend(['-o', mount_options])
+    args.extend(['--', dev, osd_data])
+    subprocess.check_call(args=args)
     subprocess.check_call(
         args=[
             '/bin/umount',

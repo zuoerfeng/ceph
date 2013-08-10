@@ -43,6 +43,9 @@ public:
   float full_ratio;
   float nearfull_ratio;
 
+  // mapping of osd to most recently reported osdmap epoch
+  hash_map<int32_t,epoch_t> osd_epochs;
+
   class Incremental {
   public:
     version_t version;
@@ -57,16 +60,27 @@ public:
   private:
     map<int32_t,osd_stat_t> osd_stat_updates;
     set<int32_t> osd_stat_rm;
+
+    // mapping of osd to most recently reported osdmap epoch
+    map<int32_t,epoch_t> osd_epochs;
   public:
+
     const map<int32_t, osd_stat_t> &get_osd_stat_updates() const {
       return osd_stat_updates;
     }
     const set<int32_t> &get_osd_stat_rm() const {
       return osd_stat_rm;
     }
+    const map<int32_t, epoch_t> &get_osd_epochs() const {
+      return osd_epochs;
+    }
+
     void add_stat(int32_t osd, epoch_t epoch, const osd_stat_t &stat) {
       assert(osd_stat_rm.find(osd) == osd_stat_rm.end());
       osd_stat_updates.insert(make_pair(osd, stat));
+      osd_epochs.insert(make_pair(osd, epoch));
+      assert(osd_epochs.size() == osd_stat_updates.size());
+    }
     void stat_osd_out(int32_t osd) {
       // 0 the stats for the osd
       osd_stat_updates.erase(osd);
@@ -74,6 +88,7 @@ public:
     }
     void rm_stat(int32_t osd) {
       osd_stat_rm.insert(osd);
+      osd_epochs.erase(osd);
       osd_stat_updates.erase(osd);
     }
     void encode(bufferlist &bl, uint64_t features=-1) const;

@@ -30,7 +30,7 @@ void PGMap::Incremental::encode(bufferlist &bl, uint64_t features) const
     return;
   }
 
-  ENCODE_START(6, 5, bl);
+  ENCODE_START(7, 5, bl);
   ::encode(version, bl);
   ::encode(pg_stat_updates, bl);
   ::encode(osd_stat_updates, bl);
@@ -41,6 +41,7 @@ void PGMap::Incremental::encode(bufferlist &bl, uint64_t features) const
   ::encode(nearfull_ratio, bl);
   ::encode(pg_remove, bl);
   ::encode(stamp, bl);
+  ::encode(osd_epochs, bl);
   ENCODE_FINISH(bl);
 }
 
@@ -89,6 +90,17 @@ void PGMap::Incremental::decode(bufferlist::iterator &bl)
   }
   if (struct_v >= 6)
     ::decode(stamp, bl);
+  if (struct_v >= 7) {
+    ::decode(osd_epochs, bl);
+  } else {
+    for (map<int32_t, osd_stat_t>::iterator i = osd_stat_updates.begin();
+	 i != osd_stat_updates.end();
+	 ++i) {
+      // This isn't accurate, but will cause trimming to behave like
+      // previously.
+      osd_epochs.insert(make_pair(i->first, osdmap_epoch));
+    }
+  }
   DECODE_FINISH(bl);
 }
 
@@ -211,6 +223,8 @@ void PGMap::apply_incremental(CephContext *cct, const Incremental& inc)
       stat_osd_sub(t->second);
       t->second = new_stats;
     }
+    assert(inc.get_osd_epochs().find(osd) != inc.get_osd_epochs().end());
+    osd_epochs.insert(*(inc.get_osd_epochs().find(osd)));
 
     stat_osd_add(new_stats);
     
@@ -436,7 +450,7 @@ void PGMap::encode(bufferlist &bl, uint64_t features) const
     return;
   }
 
-  ENCODE_START(5, 4, bl);
+  ENCODE_START(6, 4, bl);
   ::encode(version, bl);
   ::encode(pg_stat, bl);
   ::encode(osd_stat, bl);
@@ -445,6 +459,7 @@ void PGMap::encode(bufferlist &bl, uint64_t features) const
   ::encode(full_ratio, bl);
   ::encode(nearfull_ratio, bl);
   ::encode(stamp, bl);
+  ::encode(osd_epochs, bl);
   ENCODE_FINISH(bl);
 }
 
@@ -474,6 +489,17 @@ void PGMap::decode(bufferlist::iterator &bl)
   }
   if (struct_v >= 5)
     ::decode(stamp, bl);
+  if (struct_v >= 6) {
+    ::decode(osd_epochs, bl);
+  } else {
+    for (hash_map<int32_t, osd_stat_t>::iterator i = osd_stat.begin();
+	 i != osd_stat.end();
+	 ++i) {
+      // This isn't accurate, but will cause trimming to behave like
+      // previously.
+      osd_epochs.insert(make_pair(i->first, last_osdmap_epoch));
+    }
+  }
   DECODE_FINISH(bl);
 
   calc_stats();

@@ -24,6 +24,7 @@
 #include "common/errno.h"
 #include "common/safe_io.h"
 #include "common/config.h"
+#include "common/strtol.h"
 
 using namespace std;
 
@@ -79,7 +80,7 @@ class StoreTool
     assert(!prefix.empty() && !key.empty());
 
     map<string,bufferlist> result;
-    set<string> keys;
+    std::set<std::string> keys;
     keys.insert(key);
     db->get(prefix, keys, &result);
 
@@ -89,6 +90,18 @@ class StoreTool
     }
     exists = false;
     return bufferlist();
+  }
+
+  bool set(const string &prefix, const string &key, bufferlist &val) {
+    assert(!prefix.empty());
+    assert(!key.empty());
+    assert(val.length() > 0);
+
+    KeyValueDB::Transaction tx = db->get_transaction();
+    tx->set(prefix, key, val);
+    int ret = db->submit_transaction_sync(tx);
+
+    return (ret == 0);
   }
 };
 
@@ -100,7 +113,7 @@ void usage(const char *pname)
     << "  list [prefix]\n"
     << "  exists <prefix> [key]\n"
     << "  get <prefix> <key>\n"
-    << "  verify <store path>\n"
+    << "  set <prefix> <key> [ver <N>|in <file>]\n"
     << std::endl;
 }
 
@@ -171,8 +184,43 @@ int main(int argc, const char *argv[])
     bl.hexdump(os);
     std::cout << os.str() << std::endl;
 
-  } else if (cmd == "verify") {
-    assert(0);
+  } else if (cmd == "set") {
+    if (argc < 7) {
+      usage(argv[0]);
+      return 1;
+    }
+    string prefix(argv[3]);
+    string key(argv[4]);
+    string subcmd(argv[5]);
+
+    bufferlist val;
+    string errstr;
+    if (subcmd == "ver") {
+      version_t v = (version_t) strict_strtoll(argv[6], 10, &errstr);
+      if (!errstr.empty()) {
+        std::cerr << "error reading version: " << errstr << std::endl;
+        return 1;
+      }
+      ::encode(v, val);
+    } else if (subcmd == "in") {
+      int ret = val.read_file(argv[6], &errstr);
+      if (ret < 0 || !errstr.empty()) {
+        std::cerr << "error reading file: " << errstr << std::endl;
+        return 1;
+      }
+    } else {
+      std::cerr << "unrecognized subcommand '" << subcmd << "'" << std::endl;
+      usage(argv[0]);
+      return 1;
+    }
+
+    bool ret = st.set(prefix, key, val);
+    if (!ret) {
+      std::cerr << "error setting ("
+                << prefix << "," << key << ")" << std::endl;
+      return 1;
+    }
+
   } else {
     std::cerr << "Unrecognized command: " << cmd << std::endl;
     return 1;

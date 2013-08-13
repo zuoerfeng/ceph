@@ -47,18 +47,7 @@ class Finisher {
   } finisher_thread;
 
  public:
-  void queue(Context *c, int r = 0) {
-    finisher_lock.Lock();
-    if (r) {
-      finisher_queue_rval.push_back(pair<Context*, int>(c, r));
-      finisher_queue.push_back(NULL);
-    } else
-      finisher_queue.push_back(c);
-    finisher_cond.Signal();
-    finisher_lock.Unlock();
-    if (logger)
-      logger->inc(l_finisher_queue_len);
-  }
+  void queue(Context *c, int r = 0);
   void queue(vector<Context*>& ls) {
     finisher_lock.Lock();
     finisher_queue.insert(finisher_queue.end(), ls.begin(), ls.end());

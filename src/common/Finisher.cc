@@ -34,6 +34,21 @@ void Finisher::wait_for_empty()
   finisher_lock.Unlock();
 }
 
+void Finisher::queue(Context *c, int r)
+{
+  finisher_lock.Lock();
+  ldout(cct, 10) << "queue " << c << " " << r << dendl;
+  if (r) {
+    finisher_queue_rval.push_back(pair<Context*, int>(c, r));
+    finisher_queue.push_back(NULL);
+  } else
+    finisher_queue.push_back(c);
+  finisher_cond.Signal();
+  finisher_lock.Unlock();
+  if (logger)
+    logger->inc(l_finisher_queue_len);
+}
+
 void *Finisher::finisher_thread_entry()
 {
   finisher_lock.Lock();

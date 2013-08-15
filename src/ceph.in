@@ -507,11 +507,7 @@ def main():
     format = parsed_args.output_format
 
     if parsed_args.admin_socket:
-        try:
-            print admin_socket(parsed_args.admin_socket, childargs, format)
-        except Exception as e:
-            print >> sys.stderr, 'admin_socket: {0}'.format(e)
-        return 0
+        childargs = [ 'daemon', parsed_args.admin_socket ] + childargs
 
     if len(childargs) > 0 and childargs[0] == "daemon":
         if len(childargs) > 2:

@@ -162,7 +162,7 @@ public:
     (*this) = temp;
   }
 
-  string get_namespace() const {
+  const string &get_namespace() const {
     return nspace;
   }
 

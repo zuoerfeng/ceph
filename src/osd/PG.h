@@ -720,7 +720,7 @@ public:
 
     // chunky scrub
     bool is_chunky;
-    hobject_t start, end;
+    ghobject_t start, end;
     eversion_t subset_last_update;
 
     // chunky scrub state
@@ -853,7 +853,7 @@ public:
   void scrub_clear_state();
   bool scrub_gather_replica_maps();
   void _scan_list(
-    ScrubMap &map, vector<hobject_t> &ls, bool deep,
+    ScrubMap &map, vector<ghobject_t> &ls, bool deep,
     ThreadPool::TPHandle &handle);
   void _scan_snaps(ScrubMap &map);
   void _request_scrub_map_classic(int replica, eversion_t version);

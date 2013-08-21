@@ -812,7 +812,7 @@ protected:
   int do_xattr_cmp_u64(int op, __u64 v1, bufferlist& xattr);
   int do_xattr_cmp_str(int op, string& v1s, bufferlist& xattr);
 
-  bool pgls_filter(PGLSFilter *filter, hobject_t& sobj, bufferlist& outdata);
+  bool pgls_filter(PGLSFilter *filter, ghobject_t& sobj, bufferlist& outdata);
   int get_pgls_filter(bufferlist::iterator& iter, PGLSFilter **pfilter);
 
 public:

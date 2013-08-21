@@ -233,7 +233,7 @@ bool PGLSPlainFilter::filter(bufferlist& xattr_data, bufferlist& outdata)
   return true;
 }
 
-bool ReplicatedPG::pgls_filter(PGLSFilter *filter, hobject_t& sobj, bufferlist& outdata)
+bool ReplicatedPG::pgls_filter(PGLSFilter *filter, ghobject_t& sobj, bufferlist& outdata)
 {
   bufferlist bl;
 
@@ -463,7 +463,7 @@ void ReplicatedPG::do_pg_op(OpRequestRef op)
 
         dout(10) << " pgls pg=" << m->get_pg() << " count " << list_size << dendl;
 	// read into a buffer
-        vector<hobject_t> sentries;
+        vector<ghobject_t> sentries;
         pg_ls_response_t response;
 	try {
 	  ::decode(response.handle, bp);
@@ -474,8 +474,8 @@ void ReplicatedPG::do_pg_op(OpRequestRef op)
 	  break;
 	}
 
-	hobject_t next;
-	hobject_t current = response.handle;
+	ghobject_t next;
+	ghobject_t current = ghobject_t(response.handle);
 	osr->flush();
 	int r = osd->store->collection_list_partial(coll, current,
 						    list_size,
@@ -490,14 +490,14 @@ void ReplicatedPG::do_pg_op(OpRequestRef op)
 
 	assert(snapid == CEPH_NOSNAP || pg_log.get_missing().missing.empty());
 	map<hobject_t, pg_missing_t::item>::const_iterator missing_iter =
-	  pg_log.get_missing().missing.lower_bound(current);
-	vector<hobject_t>::iterator ls_iter = sentries.begin();
+	  pg_log.get_missing().missing.lower_bound(current.hobj);
+	vector<ghobject_t>::iterator ls_iter = sentries.begin();
 	while (1) {
 	  if (ls_iter == sentries.end()) {
 	    break;
 	  }
 
-	  hobject_t candidate;
+	  ghobject_t candidate;
 	  if (missing_iter == pg_log.get_missing().missing.end() ||
 	      *ls_iter < missing_iter->first) {
 	    candidate = *(ls_iter++);
@@ -511,15 +511,15 @@ void ReplicatedPG::do_pg_op(OpRequestRef op)
 	  }
 
 	  // skip snapdir objects
-	  if (candidate.snap == CEPH_SNAPDIR)
+	  if (candidate.hobj.snap == CEPH_SNAPDIR)
 	    continue;
 
-	  if (candidate.snap < snapid)
+	  if (candidate.hobj.snap < snapid)
 	    continue;
 
 	  if (snapid != CEPH_NOSNAP) {
 	    bufferlist bl;
-	    if (candidate.snap == CEPH_NOSNAP) {
+	    if (candidate.hobj.snap == CEPH_NOSNAP) {
 	      osd->store->getattr(coll, candidate, SS_ATTR, bl);
 	      SnapSet snapset(bl);
 	      if (snapid <= snapset.seq)
@@ -537,14 +537,14 @@ void ReplicatedPG::do_pg_op(OpRequestRef op)
 	  }
 
 	  // skip wrong namespace
-	  if (candidate.get_namespace() != m->get_object_locator().nspace)
+	  if (candidate.hobj.get_namespace() != m->get_object_locator().nspace)
 	    continue;
 
 	  if (filter && !pgls_filter(filter, candidate, filter_out))
 	    continue;
 
-	  response.entries.push_back(make_pair(candidate.oid,
-					       candidate.get_key()));
+	  response.entries.push_back(make_pair(candidate.hobj.oid,
+					       candidate.hobj.get_key()));
 	}
 	if (next.is_max() &&
 	    missing_iter == pg_log.get_missing().missing.end() &&
@@ -7019,7 +7019,7 @@ void ReplicatedPG::on_flushed()
   assert(object_contexts.empty());
   if (have_temp_coll() &&
       !osd->store->collection_empty(get_temp_coll())) {
-    vector<hobject_t> objects;
+    vector<ghobject_t> objects;
     osd->store->collection_list(get_temp_coll(), objects);
     derr << __func__ << ": found objects in the temp collection: "
 	 << objects << ", crashing now"
@@ -7829,36 +7829,42 @@ void ReplicatedPG::prep_backfill_object_push(
 }
 
 void ReplicatedPG::scan_range(
-  hobject_t begin, int min, int max, BackfillInterval *bi,
+  hobject_t hbegin, int min, int max, BackfillInterval *bi,
   ThreadPool::TPHandle &handle)
 {
   assert(is_locked());
+  ghobject_t begin(hbegin), end;
   dout(10) << "scan_range from " << begin << dendl;
-  bi->begin = begin;
+  bi->begin = hbegin;
   bi->objects.clear();  // for good measure
+  // XXX: Not sure if we should pass in a ghobject_t here
 
-  vector<hobject_t> ls;
+  vector<ghobject_t> ls;
   ls.reserve(max);
   int r = osd->store->collection_list_partial(coll, begin, min, max,
-					      0, &ls, &bi->end);
+					      0, &ls, &end);
+  assert(end.generation == ghobject_t::NO_GEN);
+  bi->end = end.hobj;
   assert(r >= 0);
   dout(10) << " got " << ls.size() << " items, next " << bi->end << dendl;
   dout(20) << ls << dendl;
 
-  for (vector<hobject_t>::iterator p = ls.begin(); p != ls.end(); ++p) {
+  for (vector<ghobject_t>::iterator p = ls.begin(); p != ls.end(); ++p) {
+    // XXX: For now we can't deal with erasure coded objects
+    assert(p->generation == ghobject_t::NO_GEN);
     handle.reset_tp_timeout();
     ObjectContextRef obc;
     if (is_primary())
-      obc = object_contexts.lookup(*p);
+      obc = object_contexts.lookup(p->hobj);
     if (obc) {
-      bi->objects[*p] = obc->obs.oi.version;
+      bi->objects[p->hobj] = obc->obs.oi.version;
       dout(20) << "  " << *p << " " << obc->obs.oi.version << dendl;
     } else {
       bufferlist bl;
       int r = osd->store->getattr(coll, *p, OI_ATTR, bl);
       assert(r >= 0);
       object_info_t oi(bl);
-      bi->objects[*p] = oi.version;
+      bi->objects[p->hobj] = oi.version;
       dout(20) << "  " << *p << " " << oi.version << dendl;
     }
   }

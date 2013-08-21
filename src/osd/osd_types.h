@@ -44,7 +44,7 @@
 #define CEPH_OSD_FEATURE_INCOMPAT_SHARDS CompatSet::Feature(11, "sharded objects")
 
 
-typedef hobject_t collection_list_handle_t;
+typedef ghobject_t collection_list_handle_t;
 
 
 /**

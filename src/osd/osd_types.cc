@@ -641,6 +641,13 @@ void pg_pool_t::dump(Formatter *f) const
   f->dump_stream("removed_snaps") << removed_snaps;
   f->dump_int("quota_max_bytes", quota_max_bytes);
   f->dump_int("quota_max_objects", quota_max_objects);
+  f->open_array_section("tiers");
+  for (set<string>::const_iterator p = tiers.begin(); p != tiers.end(); ++p)
+    f->dump_string("pool", *p);
+  f->close_section();
+  f->dump_string("tier_of", tier_of);
+  f->dump_string("overlay", overlay);
+  f->dump_string("cache_mode", get_cache_mode_name());
 }
 
 
@@ -845,7 +852,7 @@ void pg_pool_t::encode(bufferlist& bl, uint64_t features) const
     return;
   }
 
-  ENCODE_START(8, 5, bl);
+  ENCODE_START(9, 5, bl);
   ::encode(type, bl);
   ::encode(size, bl);
   ::encode(crush_ruleset, bl);
@@ -866,6 +873,11 @@ void pg_pool_t::encode(bufferlist& bl, uint64_t features) const
   ::encode(min_size, bl);
   ::encode(quota_max_bytes, bl);
   ::encode(quota_max_objects, bl);
+  ::encode(tiers, bl);
+  ::encode(tier_of, bl);
+  __u8 c = cache_mode;
+  ::encode(c, bl);
+  ::encode(overlay, bl);
   ENCODE_FINISH(bl);
 }
 
@@ -924,6 +936,14 @@ void pg_pool_t::decode(bufferlist::iterator& bl)
     ::decode(quota_max_bytes, bl);
     ::decode(quota_max_objects, bl);
   }
+  if (struct_v >= 9) {
+    ::decode(tiers, bl);
+    ::decode(tier_of, bl);
+    __u8 v;
+    ::decode(v, bl);
+    cache_mode = (cache_mode_t)v;
+    ::decode(overlay, bl);
+  }
   DECODE_FINISH(bl);
   calc_pg_masks();
 }
@@ -959,6 +979,11 @@ void pg_pool_t::generate_test_instances(list<pg_pool_t*>& o)
   a.removed_snaps.insert(2);   // not quite valid to combine with snaps!
   a.quota_max_bytes = 2473;
   a.quota_max_objects = 4374;
+  a.tiers.insert("cache_pool");
+  a.tiers.insert("other_cache_pool");
+  a.tier_of = "data pool";
+  a.cache_mode = CACHEMODE_WRITEBACK;
+  a.overlay = "cache_pool_overlay";
   o.push_back(new pg_pool_t(a));
 }
 
@@ -981,6 +1006,14 @@ ostream& operator<<(ostream& out, const pg_pool_t& p)
     out << " max_bytes " << p.quota_max_bytes;
   if (p.quota_max_objects)
     out << " max_objects " << p.quota_max_objects;
+  if (p.tiers.size())
+    out << " tiers " << p.tiers;
+  if (p.tier_of.length())
+    out << " tier_of " << p.tier_of;
+  if (p.overlay.length())
+    out << " overlay " << p.overlay;
+  if (p.cache_mode)
+    out << " cache_mode " << p.get_cache_mode_name();
   return out;
 }
 

@@ -722,11 +722,6 @@ struct pg_pool_t {
     TYPE_REP = 1,     // replication
     TYPE_RAID4 = 2,   // raid4 (never implemented)
   };
-  enum {
-    FLAG_HASHPSPOOL = 1, // hash pg seed and pool together (instead of adding)
-    FLAG_FULL       = 2, // pool is full
-  };
-
   static const char *get_type_name(int t) {
     switch (t) {
     case TYPE_REP: return "rep";
@@ -736,6 +731,30 @@ struct pg_pool_t {
   }
   const char *get_type_name() const {
     return get_type_name(type);
+  }
+
+  enum {
+    FLAG_HASHPSPOOL = 1, // hash pg seed and pool together (instead of adding)
+    FLAG_FULL       = 2, // pool is full
+  };
+
+  typedef enum {
+    CACHEMODE_NONE = 0,                  ///< no caching
+    CACHEMODE_WRITEBACK = 1,             ///< write to cache, flush later
+    CACHEMODE_INVALIDATE_FORWARD = 2,    ///< delete from cache, forward write
+    CACHEMODE_READONLY = 3,              ///< handle reads, forward writes [not strongly consistent]
+  } cache_mode_t;
+  static const char *get_cache_mode_name(cache_mode_t m) {
+    switch (m) {
+    case CACHEMODE_NONE: return "none";
+    case CACHEMODE_WRITEBACK: return "writeback";
+    case CACHEMODE_INVALIDATE_FORWARD: return "invalidate+forward";
+    case CACHEMODE_READONLY: return "readonly";
+    default: return "unknown";
+    }
+  }
+  const char *get_cache_mode_name() const {
+    return get_cache_mode_name(cache_mode);
   }
 
   uint64_t flags;           /// FLAG_* 
@@ -771,6 +790,12 @@ public:
 
   int pg_num_mask, pgp_num_mask;
 
+  set<string> tiers;      ///< pools that are tiers of us
+  string tier_of;           ///< pool for which we are a tier
+  string overlay;           ///< pool/tier (for objecter) to direct reads/writes to
+  cache_mode_t cache_mode;  ///< cache pool mode
+
+
   pg_pool_t()
     : flags(0), type(0), size(0), min_size(0),
       crush_ruleset(0), object_hash(0),
@@ -780,7 +805,9 @@ public:
       auid(0),
       crash_replay_interval(0),
       quota_max_bytes(0), quota_max_objects(0),
-      pg_num_mask(0), pgp_num_mask(0) { }
+      pg_num_mask(0), pgp_num_mask(0),
+      cache_mode(CACHEMODE_NONE)
+  { }
 
   void dump(Formatter *f) const;
 

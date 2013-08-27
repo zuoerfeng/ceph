@@ -3546,22 +3546,26 @@ done:
       cmd_getval(g_ceph_context, cmdmap, "val", n);
       string var;
       cmd_getval(g_ceph_context, cmdmap, "var", var);
-      if (pending_inc.new_pools.count(pool) == 0)
-	pending_inc.new_pools[pool] = *p;
       if (var == "size") {
 	if (n == 0 || n > 10) {
 	  ss << "pool size must be between 1 and 10";
 	  err = -EINVAL;
 	  goto reply;
 	}
+	if (pending_inc.new_pools.count(pool) == 0)
+	  pending_inc.new_pools[pool] = *p;
 	pending_inc.new_pools[pool].size = n;
 	if (n < p->min_size)
 	  pending_inc.new_pools[pool].min_size = n;
 	ss << "set pool " << pool << " size to " << n;
       } else if (var == "min_size") {
+	if (pending_inc.new_pools.count(pool) == 0)
+	  pending_inc.new_pools[pool] = *p;
 	pending_inc.new_pools[pool].min_size = n;
 	ss << "set pool " << pool << " min_size to " << n;
       } else if (var == "crash_replay_interval") {
+	if (pending_inc.new_pools.count(pool) == 0)
+	  pending_inc.new_pools[pool] = *p;
 	pending_inc.new_pools[pool].crash_replay_interval = n;
 	ss << "set pool " << pool << " to crash_replay_interval to " << n;
       } else if (var == "pg_num") {
@@ -3571,6 +3575,8 @@ done:
 	  ss << "currently creating pgs, wait";
 	  err = -EAGAIN;
 	} else {
+	  if (pending_inc.new_pools.count(pool) == 0)
+	    pending_inc.new_pools[pool] = *p;
 	  pending_inc.new_pools[pool].set_pg_num(n);
 	  ss << "set pool " << pool << " pg_num to " << n;
 	}
@@ -3581,17 +3587,24 @@ done:
 	  ss << "still creating pgs, wait";
 	  err = -EAGAIN;
 	} else {
+	  if (pending_inc.new_pools.count(pool) == 0)
+	    pending_inc.new_pools[pool] = *p;
 	  pending_inc.new_pools[pool].set_pgp_num(n);
 	  ss << "set pool " << pool << " pgp_num to " << n;
 	}
       } else if (var == "crush_ruleset") {
 	if (osdmap.crush->rule_exists(n)) {
+	  if (pending_inc.new_pools.count(pool) == 0)
+	    pending_inc.new_pools[pool] = *p;
 	  pending_inc.new_pools[pool].crush_ruleset = n;
 	  ss << "set pool " << pool << " crush_ruleset to " << n;
 	} else {
 	  ss << "crush ruleset " << n << " does not exist";
 	  err = -ENOENT;
 	}
+      } else {
+	err = -EINVAL;
+	goto reply;
       }
       pending_inc.new_pools[pool].last_change = pending_inc.epoch;
       getline(ss, rs);

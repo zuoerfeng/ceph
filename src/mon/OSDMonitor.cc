@@ -3611,6 +3611,87 @@ done:
       wait_for_finished_proposal(new Monitor::C_Command(mon, m, 0, rs, get_last_committed()));
       return true;
     }
+  } else if (prefix == "osd tier add") {
+    string poolstr;
+    cmd_getval(g_ceph_context, cmdmap, "pool", poolstr);
+    int64_t pool_id = osdmap.lookup_pg_pool_name(poolstr);
+    if (pool_id < 0) {
+      ss << "unrecognized pool '" << poolstr << "'";
+      err = -ENOENT;
+      goto reply;
+    }
+    string tierpoolstr;
+    cmd_getval(g_ceph_context, cmdmap, "tierpool", tierpoolstr);
+    int64_t tierpool_id = osdmap.lookup_pg_pool_name(tierpoolstr);
+    if (tierpool_id < 0) {
+      ss << "unrecognized pool '" << tierpoolstr << "'";
+      err = -ENOENT;
+      goto reply;
+    }
+    const pg_pool_t *p = osdmap.get_pg_pool(pool_id);
+    assert(p);
+    const pg_pool_t *tp = osdmap.get_pg_pool(tierpool_id);
+    assert(tp);
+    if (p->tiers.count(tierpoolstr)) {
+      assert(tp->tier_of == poolstr);
+      err = 0;
+      goto reply;
+    }
+    if (tp->tier_of.length()) {
+      ss << "tier pool '" << tierpoolstr << "' is already a tier of '" << tp->tier_of << "'";
+      err = -EINVAL;
+      goto reply;
+    }
+    // go
+    ss << "added tier '" << tierpoolstr << "' to '" << poolstr << "'";
+    if (pending_inc.new_pools.count(pool_id) == 0)
+      pending_inc.new_pools[pool_id] = *p;
+    if (pending_inc.new_pools.count(tierpool_id) == 0)
+      pending_inc.new_pools[tierpool_id] = *tp;
+    pending_inc.new_pools[pool_id].tiers.insert(tierpoolstr);
+    pending_inc.new_pools[tierpool_id].tier_of = poolstr;
+    wait_for_finished_proposal(new Monitor::C_Command(mon, m, 0, ss.str(), get_last_committed()));
+    return true;
+  } else if (prefix == "osd tier remove") {
+    string poolstr;
+    cmd_getval(g_ceph_context, cmdmap, "pool", poolstr);
+    int64_t pool_id = osdmap.lookup_pg_pool_name(poolstr);
+    if (pool_id < 0) {
+      ss << "unrecognized pool '" << poolstr << "'";
+      err = -ENOENT;
+      goto reply;
+    }
+    string tierpoolstr;
+    cmd_getval(g_ceph_context, cmdmap, "tierpool", tierpoolstr);
+    int64_t tierpool_id = osdmap.lookup_pg_pool_name(tierpoolstr);
+    if (tierpool_id < 0) {
+      ss << "unrecognized pool '" << tierpoolstr << "'";
+      err = -ENOENT;
+      goto reply;
+    }
+    const pg_pool_t *p = osdmap.get_pg_pool(pool_id);
+    assert(p);
+    const pg_pool_t *tp = osdmap.get_pg_pool(tierpool_id);
+    assert(tp);
+    if (p->tiers.count(tierpoolstr) == 0) {
+      err = 0;
+      goto reply;
+    }
+    if (tp->tier_of != poolstr) {
+      ss << "tier pool '" << tierpoolstr << "' is a tier of '" << tp->tier_of << "'";
+      err = -EINVAL;
+      goto reply;
+    }
+    // go
+    ss << "removed tier '" << tierpoolstr << "' from '" << poolstr << "'";
+    if (pending_inc.new_pools.count(pool_id) == 0)
+      pending_inc.new_pools[pool_id] = *p;
+    if (pending_inc.new_pools.count(tierpool_id) == 0)
+      pending_inc.new_pools[tierpool_id] = *tp;
+    pending_inc.new_pools[pool_id].tiers.erase(tierpoolstr);
+    pending_inc.new_pools[tierpool_id].tier_of.clear();
+    wait_for_finished_proposal(new Monitor::C_Command(mon, m, 0, ss.str(), get_last_committed()));
+    return true;
   } else if (prefix == "osd pool set-quota") {
     string poolstr;
     cmd_getval(g_ceph_context, cmdmap, "pool", poolstr);
@@ -3671,7 +3752,6 @@ done:
       wait_for_finished_proposal(new Monitor::C_Command(mon, m, 0, rs, get_last_committed()));
       return true;
     }
-
   } else if (prefix == "osd thrash") {
     int64_t num_epochs;
     cmd_getval(g_ceph_context, cmdmap, "num_epochs", num_epochs, int64_t(0));

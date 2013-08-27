@@ -292,7 +292,7 @@ bin_DEBUGPROGRAMS += ceph_kvstorebench
 
 ceph_multi_stress_watch_SOURCES = test/multi_stress_watch.cc test/librados/test.cc
 ceph_multi_stress_watch_LDADD = librados.la $(LIBGLOBAL_LDA)
-bin_DEBUGPROGRAMS += ceph_multi_stress_watch 
+bin_DEBUGPROGRAMS += ceph_multi_stress_watch
 
 if WITH_BUILD_TESTS
 ceph_test_libcommon_build_SOURCES = test/test_libcommon_build.cc $(libcommon_files)
@@ -328,8 +328,8 @@ endif
 
 ##########
 BUILT_SOURCES =
-lib_LTLIBRARIES = 
-noinst_LTLIBRARIES = 
+lib_LTLIBRARIES =
+noinst_LTLIBRARIES =
 noinst_LIBRARIES =
 
 # libcephfs
@@ -472,7 +472,7 @@ librbd_la_CFLAGS = ${AM_CFLAGS} ${CRYPTO_CFLAGS}
 librbd_la_CXXFLAGS = ${AM_CXXFLAGS}
 librbd_la_LIBADD = librados.la
 librbd_la_LDFLAGS = ${AM_LDFLAGS} -version-info 1:0:0 \
-	-export-symbols-regex '^rbd_.*' $(PTHREAD_LIBS) $(EXTRALIBS) 
+	-export-symbols-regex '^rbd_.*' $(PTHREAD_LIBS) $(EXTRALIBS)
 lib_LTLIBRARIES += librbd.la
 
 rados_SOURCES = rados.cc rados_import.cc rados_export.cc rados_sync.cc common/obj_bencher.cc
@@ -518,7 +518,7 @@ ceph_test_crypto_CXXFLAGS = ${AM_CXXFLAGS}
 bin_DEBUGPROGRAMS += ceph_test_crypto
 
 ceph_test_keys_SOURCES = testkeys.cc
-ceph_test_keys_LDADD = libmon.a $(LIBGLOBAL_LDA) 
+ceph_test_keys_LDADD = libmon.a $(LIBGLOBAL_LDA)
 ceph_test_keys_CXXFLAGS = ${AM_CXXFLAGS}
 bin_DEBUGPROGRAMS += ceph_test_keys
 
@@ -774,10 +774,10 @@ check_PROGRAMS += unittest_util
 
 unittest_workqueue_SOURCES = test/test_workqueue.cc
 unittest_workqueue_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
-unittest_workqueue_LDADD = $(LIBGLOBAL_LDA) ${UNITTEST_LDADD} 
+unittest_workqueue_LDADD = $(LIBGLOBAL_LDA) ${UNITTEST_LDADD}
 check_PROGRAMS += unittest_workqueue
 
-unittest_striper_SOURCES = test/test_striper.cc 
+unittest_striper_SOURCES = test/test_striper.cc
 unittest_striper_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
 unittest_striper_LDADD = libosdc.la $(LIBGLOBAL_LDA) ${UNITTEST_LDADD}
 check_PROGRAMS += unittest_striper
@@ -789,7 +789,7 @@ check_PROGRAMS += unittest_prebufferedstreambuf
 
 unittest_str_list_SOURCES = test/test_str_list.cc
 unittest_str_list_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
-unittest_str_list_LDADD = $(LIBGLOBAL_LDA) ${UNITTEST_LDADD} 
+unittest_str_list_LDADD = $(LIBGLOBAL_LDA) ${UNITTEST_LDADD}
 check_PROGRAMS += unittest_str_list
 
 unittest_log_SOURCES = log/test.cc common/PrebufferedStreambuf.cc
@@ -818,12 +818,12 @@ check_PROGRAMS += unittest_ceph_argparse
 
 unittest_osd_types_SOURCES = test/test_osd_types.cc
 unittest_osd_types_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
-unittest_osd_types_LDADD = $(LIBGLOBAL_LDA) libcommon.la ${UNITTEST_LDADD} 
+unittest_osd_types_LDADD = $(LIBGLOBAL_LDA) libcommon.la ${UNITTEST_LDADD}
 check_PROGRAMS += unittest_osd_types
 
 unittest_pglog_SOURCES = test/osd/TestPGLog.cc objclass/class_api.cc perfglue/disabled_heap_profiler.cc
 unittest_pglog_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
-unittest_pglog_LDADD =  libosd.a $(LIBOS_LDA) $(LIBGLOBAL_LDA) ${UNITTEST_LDADD} 
+unittest_pglog_LDADD =  libosd.a $(LIBOS_LDA) $(LIBGLOBAL_LDA) ${UNITTEST_LDADD}
 check_PROGRAMS += unittest_pglog
 
 if LINUX
@@ -857,7 +857,7 @@ unittest_librados_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
 check_PROGRAMS += unittest_librados
 
 unittest_bufferlist_SOURCES = test/bufferlist.cc
-unittest_bufferlist_LDADD = ${UNITTEST_LDADD} $(LIBGLOBAL_LDA) 
+unittest_bufferlist_LDADD = ${UNITTEST_LDADD} $(LIBGLOBAL_LDA)
 unittest_bufferlist_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
 check_PROGRAMS += unittest_bufferlist
 
@@ -994,7 +994,7 @@ unittest_ipaddr_LDADD = ${UNITTEST_LDADD} $(LIBGLOBAL_LDA)
 unittest_ipaddr_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
 check_PROGRAMS += unittest_ipaddr
 
-unittest_texttable_SOURCES = test/test_texttable.cc common/TextTable.cc 
+unittest_texttable_SOURCES = test/test_texttable.cc common/TextTable.cc
 unittest_texttable_LDFLAGS = $(PTHREAD_CFLAGS) ${AM_LDFLAGS}
 unittest_texttable_LDADD = librados.la ${UNITTEST_LDADD}
 unittest_texttable_CXXFLAGS = ${AM_CXXFLAGS} ${UNITTEST_CXXFLAGS}
@@ -1714,7 +1714,7 @@ python_PYTHON = pybind/rados.py \
 		pybind/ceph_argparse.py \
 		pybind/ceph_rest_api.py
 
-# headers... and everything else we want to include in a 'make dist' 
+# headers... and everything else we want to include in a 'make dist'
 # that autotools doesn't magically identify.
 noinst_HEADERS = \
 	rados_sync.h \
@@ -2355,3 +2355,11 @@ project.tgz: clean
 coverity-submit:
 	scp project.tgz ceph.com:/home/ceph_site/ceph.com/coverity/`git describe`.tgz
 	curl --data "project=ceph&password=`cat ~/coverity.build.pass.txt`&email=sage@newdream.net&url=http://ceph.com/coverity/`git describe`.tgz" http://scan5.coverity.com/cgi-bin/submit_build.py
+
+# Install Python bindings into a virtualenv
+install-pybind:
+	# bootstrap requires us to be in the same directory
+	@cd pybind && ./bootstrap
+
+uninstall-pybind:
+	rm -rf pybind/virtualenv

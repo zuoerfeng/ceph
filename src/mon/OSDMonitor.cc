@@ -3692,6 +3692,37 @@ done:
     pending_inc.new_pools[tierpool_id].tier_of.clear();
     wait_for_finished_proposal(new Monitor::C_Command(mon, m, 0, ss.str(), get_last_committed()));
     return true;
+  } else if (prefix == "osd tier cache-mode") {
+    string poolstr;
+    cmd_getval(g_ceph_context, cmdmap, "pool", poolstr);
+    int64_t pool_id = osdmap.lookup_pg_pool_name(poolstr);
+    if (pool_id < 0) {
+      ss << "unrecognized pool '" << poolstr << "'";
+      err = -ENOENT;
+      goto reply;
+    }
+    const pg_pool_t *p = osdmap.get_pg_pool(pool_id);
+    assert(p);
+    if (p->tier_of.length() == 0) {
+      ss << "pool '" << poolstr << "' is not a tier";
+      err = -EINVAL;
+      goto reply;
+    }
+    string modestr;
+    cmd_getval(g_ceph_context, cmdmap, "mode", modestr);
+    pg_pool_t::cache_mode_t mode = pg_pool_t::get_cache_mode_from_str(modestr);
+    if (mode < 0) {
+      ss << "'" << modestr << "' is not a valid cache mode";
+      err = -EINVAL;
+      goto reply;
+    }
+    // go
+    ss << "set cache-mode for pool '" << poolstr << "' to " << mode;
+    if (pending_inc.new_pools.count(pool_id) == 0)
+      pending_inc.new_pools[pool_id] = *p;
+    pending_inc.new_pools[pool_id].cache_mode = mode;
+    wait_for_finished_proposal(new Monitor::C_Command(mon, m, 0, ss.str(), get_last_committed()));
+    return true;
   } else if (prefix == "osd pool set-quota") {
     string poolstr;
     cmd_getval(g_ceph_context, cmdmap, "pool", poolstr);

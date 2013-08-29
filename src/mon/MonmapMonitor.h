@@ -30,6 +30,7 @@ using namespace std;
 #include "PaxosService.h"
 #include "MonMap.h"
 #include "MonitorDBStore.h"
+#include "Monitor.h"
 
 class MMonGetMap;
 class MMonMap;
@@ -80,6 +81,29 @@ class MonmapMonitor : public PaxosService {
   bool should_propose(double& delay);
 
   void tick();
+
+  struct C_MonmapCommand : public Monitor::C_Command {
+    utime_t last_changed;
+
+    C_MonmapCommand(Monitor *_mon, MMonCommand *_m, int r,
+                    string s, version_t v, utime_t changed) :
+      Monitor::C_Command(_mon, _m, r, s, v),
+      last_changed(changed)
+    { }
+
+    void finish(int r) {
+      int ret = r;
+      if (r == -EAGAIN) {
+        MonMap m;
+        mon->monmon()->get_monmap(m);
+        if ((m.get_epoch() == version+1)
+            && (m.last_changed == last_changed)) {
+          ret = 0;
+        }
+      }
+      Monitor::C_Command::finish(ret);
+    }
+  };
 
  private:
   bufferlist monmap_bl;

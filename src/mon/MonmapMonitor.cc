@@ -298,12 +298,27 @@ bool MonmapMonitor::prepare_command(MMonCommand *m)
       addr.set_port(CEPH_MON_PORT);
     }
 
+    do {
+      if (pending_map.contains(addr)) {
+        string n = pending_map.get_name(addr);
+        if (n == name)
+          break;
+      } else if (pending_map.contains(name))
+    } while (false);
+
     if (pending_map.contains(addr) ||
 	pending_map.contains(name)) {
-      err = -EEXIST;
       if (!ss.str().empty())
 	ss << "; ";
-      ss << "mon " << name << " " << addr << " already exists";
+
+      string n = pending_map.get_name(addr);
+      if (n == name) {
+        err = 0;
+        ss << "added mon." << name << " at " << addr;
+      } else {
+        err = -EEXIST;
+        ss << "mon." << name << " at " << addr << " already exists";
+      }
       goto out;
     }
 
@@ -311,7 +326,9 @@ bool MonmapMonitor::prepare_command(MMonCommand *m)
     pending_map.last_changed = ceph_clock_now(g_ceph_context);
     ss << "added mon." << name << " at " << addr;
     getline(ss, rs);
-    wait_for_finished_proposal(new Monitor::C_Command(mon, m, 0, rs, get_last_committed()));
+    wait_for_finished_proposal(new C_MonmapCommand(mon, m, 0, rs,
+                                                   get_last_committed(),
+                                                   pending_map.last_changed));
     return true;
 
   } else if (prefix == "mon remove") {

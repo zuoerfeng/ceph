@@ -733,6 +733,8 @@ public:
     return oid;
   }
   static void recursive_remove_collection(ObjectStore *store, coll_t tmp);
+  static CompatSet get_osd_initial_compat_set();
+  static CompatSet get_osd_compat_set();
   
 
 private:

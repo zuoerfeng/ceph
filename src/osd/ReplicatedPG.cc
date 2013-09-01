@@ -279,7 +279,8 @@ void ReplicatedPG::wait_for_missing_object(const hobject_t& soid, OpRequestRef o
     dout(7) << "missing " << soid << " v " << v << ", pulling." << dendl;
     map<int, vector<PullOp> > pulls;
     prepare_pull(soid, v, cct->_conf->osd_client_op_priority, &pulls);
-    send_pulls(cct->_conf->osd_client_op_priority, pulls);
+    // TODOSAM: replace
+    //send_pulls(g_conf->osd_client_op_priority, pulls);
   }
   waiting_for_missing_object[soid].push_back(op);
   op->mark_delayed("waiting for missing object");
@@ -337,7 +338,8 @@ void ReplicatedPG::wait_for_degraded_object(const hobject_t& soid, OpRequestRef 
     }
     map<int, vector<PushOp> > pushes;
     prep_object_replica_pushes(soid, v, cct->_conf->osd_client_op_priority, &pushes);
-    send_pushes(cct->_conf->osd_client_op_priority, pushes);
+    // TODOSAM: replace
+    //send_pushes(g_conf->osd_client_op_priority, pushes);
   }
   waiting_for_degraded_object[soid].push_back(op);
   op->mark_delayed("waiting for degraded object");
@@ -6089,9 +6091,9 @@ void ReplicatedPG::prep_push(
   pi.recovery_progress = new_progress;
 }
 
-int ReplicatedPG::send_pull_legacy(int prio, int peer,
-			    const ObjectRecoveryInfo &recovery_info,
-			    ObjectRecoveryProgress progress)
+int ReplicatedBackend::send_pull_legacy(int prio, int peer,
+					const ObjectRecoveryInfo &recovery_info,
+					ObjectRecoveryProgress progress)
 {
   // send op
   tid_t tid = osd->get_tid();
@@ -6104,7 +6106,7 @@ int ReplicatedPG::send_pull_legacy(int prio, int peer,
 	   << " from osd." << peer
 	   << " tid " << tid << dendl;
 
-  MOSDSubOp *subop = new MOSDSubOp(rid, info.pgid, recovery_info.soid,
+  MOSDSubOp *subop = new MOSDSubOp(rid, get_info().pgid, recovery_info.soid,
 				   false, CEPH_OSD_FLAG_ACK,
 				   get_osdmap()->get_epoch(), tid,
 				   recovery_info.version);
@@ -6364,7 +6366,7 @@ void ReplicatedBackend::handle_push(
       t);
 }
 
-void ReplicatedPG::send_pushes(int prio, map<int, vector<PushOp> > &pushes)
+void ReplicatedBackend::send_pushes(int prio, map<int, vector<PushOp> > &pushes)
 {
   for (map<int, vector<PushOp> >::iterator i = pushes.begin();
        i != pushes.end();
@@ -6388,7 +6390,7 @@ void ReplicatedPG::send_pushes(int prio, map<int, vector<PushOp> > &pushes)
 	uint64_t cost = 0;
 	uint64_t pushes = 0;
 	MOSDPGPush *msg = new MOSDPGPush();
-	msg->pgid = info.pgid;
+	msg->pgid = get_info().pgid;
 	msg->map_epoch = get_osdmap()->get_epoch();
 	msg->set_priority(prio);
 	for (;
@@ -6409,7 +6411,7 @@ void ReplicatedPG::send_pushes(int prio, map<int, vector<PushOp> > &pushes)
   }
 }
 
-void ReplicatedPG::send_pulls(int prio, map<int, vector<PullOp> > &pulls)
+void ReplicatedBackend::send_pulls(int prio, map<int, vector<PullOp> > &pulls)
 {
   for (map<int, vector<PullOp> >::iterator i = pulls.begin();
        i != pulls.end();
@@ -6436,7 +6438,7 @@ void ReplicatedPG::send_pulls(int prio, map<int, vector<PullOp> > &pulls)
 	       << " to osd." << i->first << dendl;
       MOSDPGPull *msg = new MOSDPGPull();
       msg->set_priority(prio);
-      msg->pgid = info.pgid;
+      msg->pgid = get_info().pgid;
       msg->map_epoch = get_osdmap()->get_epoch();
       msg->pulls.swap(i->second);
       msg->compute_cost(cct);
@@ -6553,11 +6555,11 @@ int ReplicatedPG::build_push_op(const ObjectRecoveryInfo &recovery_info,
   return 0;
 }
 
-int ReplicatedPG::send_push_op_legacy(int prio, int peer, PushOp &pop)
+int ReplicatedBackend::send_push_op_legacy(int prio, int peer, PushOp &pop)
 {
   tid_t tid = osd->get_tid();
   osd_reqid_t rid(osd->get_cluster_msgr_name(), 0, tid);
-  MOSDSubOp *subop = new MOSDSubOp(rid, info.pgid, pop.soid,
+  MOSDSubOp *subop = new MOSDSubOp(rid, get_info().pgid, pop.soid,
 				   false, 0, get_osdmap()->get_epoch(),
 				   tid, pop.recovery_info.version);
   subop->ops = vector<OSDOp>(1);
@@ -6578,7 +6580,7 @@ int ReplicatedPG::send_push_op_legacy(int prio, int peer, PushOp &pop)
   return 0;
 }
 
-void ReplicatedPG::prep_push_op_blank(const hobject_t& soid, PushOp *op)
+void ReplicatedBackend::prep_push_op_blank(const hobject_t& soid, PushOp *op)
 {
   op->recovery_info.version = eversion_t();
   op->version = eversion_t();
@@ -7688,8 +7690,9 @@ int ReplicatedPG::recover_primary(int max, ThreadPool::TPHandle &handle)
     if (!skipped)
       pg_log.set_last_requested(v);
   }
-
-  send_pulls(cct->_conf->osd_recovery_op_priority, pulls);
+ 
+  // TODOSAM: replace
+  //send_pulls(g_conf->osd_recovery_op_priority, pulls);
   return started;
 }
 
@@ -7794,7 +7797,8 @@ int ReplicatedPG::recover_replicas(int max, ThreadPool::TPHandle &handle)
     }
   }
 
-  send_pushes(cct->_conf->osd_recovery_op_priority, pushes);
+  // TODOSAM: replace
+  //send_pushes(g_conf->osd_recovery_op_priority, pushes);
 
   return started;
 }
@@ -7966,7 +7970,8 @@ int ReplicatedPG::recover_backfill(
     prep_backfill_object_push(
       i->first, i->second.first, i->second.second, backfill_target, &pushes);
   }
-  send_pushes(cct->_conf->osd_recovery_op_priority, pushes);
+  // TODOSAM: replace
+  //send_pushes(g_conf->osd_recovery_op_priority, pushes);
 
   release_waiting_for_backfill_pos();
   dout(5) << "backfill_pos is " << backfill_pos << " and pinfo.last_backfill is "

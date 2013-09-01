@@ -543,17 +543,6 @@ protected:
   set<hobject_t> temp_contents;
 
   ObjectRecoveryInfo recalc_subsets(const ObjectRecoveryInfo& recovery_info);
-  static void trim_pushed_data(const interval_set<uint64_t> &copy_subset,
-			       const interval_set<uint64_t> &intervals_received,
-			       bufferlist data_received,
-			       interval_set<uint64_t> *intervals_usable,
-			       bufferlist *data_usable);
-  bool handle_pull_response(
-    int from, PushOp &op, PullOp *response,
-    ObjectStore::Transaction *t);
-  void handle_push(
-    int from, PushOp &op, PushReplyOp *response,
-    ObjectStore::Transaction *t);
   void send_pushes(int prio, map<int, vector<PushOp> > &pushes);
   int build_push_op(const ObjectRecoveryInfo &recovery_info,
 		    const ObjectRecoveryProgress &progress,
@@ -846,8 +835,6 @@ protected:
   void _committed_pushed_object(epoch_t epoch, eversion_t lc);
   void recover_got(hobject_t oid, eversion_t v);
   void _failed_push(int from, const hobject_t &soid);
-  bool handle_push_reply(int peer, PushReplyOp &op, PushOp *reply);
-  void handle_pull(int peer, PullOp &op, PushOp *reply);
 
   // -- copyfrom --
   map<hobject_t, CopyOpRef> copy_ops;

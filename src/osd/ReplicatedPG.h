@@ -538,6 +538,7 @@ protected:
     }
   };
   map<hobject_t, PullInfo> pulling;
+  set<hobject_t> recovering;
 
   // Track contents of temp collection, clear on reset
   set<hobject_t> temp_contents;
@@ -614,10 +615,6 @@ protected:
 			 const hobject_t &last_backfill,
 			 interval_set<uint64_t>& data_subset,
 			 map<hobject_t, interval_set<uint64_t> >& clone_subsets);
-  void calc_clone_subsets(SnapSet& snapset, const hobject_t& poid, const pg_missing_t& missing,
-			  const hobject_t &last_backfill,
-			  interval_set<uint64_t>& data_subset,
-			  map<hobject_t, interval_set<uint64_t> >& clone_subsets);
   void prep_push_to_replica(
     ObjectContextRef obc,
     const hobject_t& oid,
@@ -641,11 +638,11 @@ protected:
   // Cancels/resets pulls from peer
   void check_recovery_sources(const OSDMapRef map);
 
-  int prepare_pull(
-    const hobject_t& oid, eversion_t v,
+  int recover_missing(
+    const hobject_t& oid,
+    eversion_t v,
     int priority,
-    map<int, vector<PullOp> > *pulls
-    );
+    PGBackend::RecoveryHandle *h);
 
   // low level ops
 

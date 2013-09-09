@@ -149,6 +149,7 @@ private:
   struct PushInfo {
     ObjectRecoveryProgress recovery_progress;
     ObjectRecoveryInfo recovery_info;
+    ObjectContextRef obc;
 
     void dump(Formatter *f) const {
       {
@@ -169,6 +170,8 @@ private:
   struct PullInfo {
     ObjectRecoveryProgress recovery_progress;
     ObjectRecoveryInfo recovery_info;
+    ObjectContextRef head_ctx;
+    ObjectContextRef obc;
 
     void dump(Formatter *f) const {
       {

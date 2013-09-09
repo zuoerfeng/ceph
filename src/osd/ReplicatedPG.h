@@ -501,8 +501,6 @@ protected:
   // Track contents of temp collection, clear on reset
   set<hobject_t> temp_contents;
 
-  ObjectRecoveryInfo recalc_subsets(const ObjectRecoveryInfo& recovery_info);
-    
   /*
    * Backfill
    *

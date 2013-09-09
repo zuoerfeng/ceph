@@ -19,11 +19,13 @@
 #include "PGBackend.h"
 #include "osd_types.h"
 
+struct C_ReplicatedBackend_OnPullComplete;
 class ReplicatedBackend : public PGBackend {
   struct RPGHandle : public PGBackend::RecoveryHandle {
     map<int, vector<PushOp> > pushes;
     map<int, vector<PullOp> > pulls;
   };
+  friend struct C_ReplicatedBackend_OnPullComplete;
 private:
   bool temp_created;
   const coll_t temp_coll;
@@ -43,8 +45,11 @@ public:
   ReplicatedBackend(PGBackend::Listener *pg, coll_t coll, OSDService *osd);
 
   /// @see PGBackend::open_recovery_op
-  PGBackend::RecoveryHandle *open_recovery_op() {
+  RPGHandle *_open_recovery_op() {
     return new RPGHandle();
+  }
+  PGBackend::RecoveryHandle *open_recovery_op() {
+    return _open_recovery_op();
   }
 
   /// @see PGBackend::run_recovery_op
@@ -215,8 +220,10 @@ private:
 
   bool handle_push_reply(int peer, PushReplyOp &op, PushOp *reply);
   void handle_pull(int peer, PullOp &op, PushOp *reply);
-  bool handle_pull_response(int from, PushOp &op, PullOp *response,
-			    ObjectStore::Transaction *t);
+  bool handle_pull_response(
+    int from, PushOp &op, PullOp *response,
+    list<pair<hobject_t, ObjectContextRef> > *to_continue,
+    ObjectStore::Transaction *t);
   void handle_push(int from, PushOp &op, PushReplyOp *response,
 		   ObjectStore::Transaction *t);
 

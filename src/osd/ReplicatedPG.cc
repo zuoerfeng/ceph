@@ -1593,14 +1593,14 @@ void ReplicatedBackend::_do_push(OpRequestRef op)
   get_parent()->queue_transaction(t);
 }
 
-struct C_ReplicatedBackend_OnPullComplete : Context {
+struct C_ReplicatedBackend_OnPullComplete : GenContext<ThreadPool::TPHandle&> {
   ReplicatedBackend *bc;
   list<pair<hobject_t, ObjectContextRef> > to_continue;
   int priority;
   C_ReplicatedBackend_OnPullComplete(ReplicatedBackend *bc, int priority)
     : bc(bc), priority(priority) {}
 
-  void finish(int) {
+  void finish(ThreadPool::TPHandle &handle) {
     ReplicatedBackend::RPGHandle *h = bc->_open_recovery_op();
     for (list<pair<hobject_t, ObjectContextRef> >::iterator i =
 	   to_continue.begin();
@@ -1610,6 +1610,7 @@ struct C_ReplicatedBackend_OnPullComplete : Context {
 	bc->get_parent()->on_global_recover(
 	  i->first);
       }
+      handle.reset_tp_timeout();
     }
     bc->run_recovery_op(h, priority);
   }
@@ -1638,7 +1639,9 @@ void ReplicatedBackend::_do_pull_response(OpRequestRef op)
 	m->get_priority());
     c->to_continue.swap(to_continue);
     t->register_on_complete(
-      get_parent()->bless_context(c));
+      new QueueInWQ(
+	&osd->push_wq,
+	get_parent()->bless_gencontext(c)));
   }
   replies.erase(replies.end() - 1);
 
@@ -6858,7 +6861,9 @@ void ReplicatedBackend::sub_op_push(OpRequestRef op)
 	  op->request->get_priority());
       c->to_continue.swap(to_continue);
       t->register_on_complete(
-	get_parent()->bless_context(c));
+	new QueueInWQ(
+	  &osd->push_wq,
+	  get_parent()->bless_gencontext(c)));
     }
     run_recovery_op(h, op->request->get_priority());
   } else {

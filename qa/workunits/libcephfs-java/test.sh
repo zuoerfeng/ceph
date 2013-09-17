@@ -26,7 +26,15 @@ else
 	echo "ceph_java was set to $ceph_java"
 fi
 
-command="java -DCEPH_CONF_FILE=$conf -Djava.library.path=$ld_lib_path -cp /usr/share/java/junit4.jar:$ceph_java/libcephfs.jar:$ceph_java/libcephfs-test.jar org.junit.runner.JUnitCore com.ceph.fs.CephAllTests"
+ant_home="$ANT_HOME"
+if [ -z "$ant_home" ] ; then
+	echo "Setting ANT_HOME to /usr/share/ant/"
+	ant_home="/usr/share/ant/"
+else
+	echo "ANT_HOME was set to $ant_home"
+fi
+
+command="java -DANT_HOME=$ant_home -DCEPH_CONF_FILE=$conf -Djava.library.path=$ld_lib_path -cp /usr/share/java/junit4.jar:$ceph_java/libcephfs.jar:$ceph_java/libcephfs-test.jar org.junit.runner.JUnitCore com.ceph.fs.CephAllTests"
 
 echo "----------------------"
 echo $command

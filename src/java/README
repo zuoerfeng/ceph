@@ -32,9 +32,9 @@ to that location from wherever the junit jar is installed.
 Ant is used to run the unit test (apt-get install ant). For example:
 
   $ cd src/
-  $ ./vstart -d -n --localhost
+  $ ./vstart.sh -d -n --localhost
   $ cd java
-  $ CEPHFS_CONF=../ceph.conf CLASSPATH=/usr/share/java/junit4.jar ant test
+  $ ANT_HOME=/usr/share/ant/ CEPHFS_CONF=../ceph.conf CLASSPATH=/usr/share/java/junit4.jar ant test
 
 1. The tests depend on the compiled wrappers. If the wrappers are installed as
 part of a package (e.g. Debian package) then this should 'just work'. Ant will

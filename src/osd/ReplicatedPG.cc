@@ -7933,14 +7933,8 @@ int ReplicatedPG::recover_backfill(
   int local_min = osd->store->get_ideal_list_min();
   int local_max = osd->store->get_ideal_list_max();
 
-  // re-scan our local interval to cope with recent changes
-  // FIXME: we could track the eversion_t when we last scanned, and invalidate
-  // that way.  or explicitly modify/invalidate when we actually change specific
-  // objects.
-  dout(10) << " rescanning local backfill_info from " << backfill_pos << dendl;
-  backfill_info.clear();
-  osr->flush();
-  scan_range(backfill_pos, local_min, local_max, &backfill_info, handle);
+  // update our local interval to cope with recent changes
+  update_range(&backfill_info, handle);
 
   int ops = 0;
   map<hobject_t, pair<eversion_t, eversion_t> > to_push;
@@ -8122,12 +8116,52 @@ void ReplicatedPG::prep_backfill_object_push(
     h);
 }
 
+void ReplicatedPG::update_range(
+  BackfillInterval *bi,
+  ThreadPool::TPHandle &handle)
+{
+  int local_min = osd->store->get_ideal_list_min();
+  int local_max = osd->store->get_ideal_list_max();
+  if (bi->version >= info.last_update) {
+    dout(10) << __func__<< ": bi is current " << dendl;
+    assert(bi->version == info.last_update);
+    return;
+  } else if (bi->version >= info.log_tail) {
+    dout(10) << __func__<< ": bi is old, can be updated with log" << dendl;
+    list<pg_log_entry_t>::const_iterator i =
+      pg_log.get_log().log.end();
+    while (i != pg_log.get_log().log.begin() &&
+           i->version > bi->version) {
+      --i;
+    }
+
+    for (; i != pg_log.get_log().log.end(); ++i) {
+      if (i->is_update()) {
+	bi->objects.erase(i->soid);
+	bi->objects.insert(
+	  make_pair(
+	    i->soid,
+	    i->version));
+      } else if (i->is_delete()) {
+	bi->objects.erase(i->soid);
+      }
+    }
+  } else {
+    dout(10) << __func__<< ": bi is old, rescanning local backfill_info"
+	     << dendl;
+    backfill_info.clear();
+    osr->flush();
+    scan_range(backfill_pos, local_min, local_max, &backfill_info, handle);
+  }
+}
+
 void ReplicatedPG::scan_range(
   hobject_t begin, int min, int max, BackfillInterval *bi,
   ThreadPool::TPHandle &handle)
 {
   assert(is_locked());
   dout(10) << "scan_range from " << begin << dendl;
+  bi->version = info.last_update;
   bi->begin = begin;
   bi->objects.clear();  // for good measure
 

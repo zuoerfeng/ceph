@@ -624,6 +624,12 @@ protected:
     ThreadPool::TPHandle &handle
     );
 
+  /// Update a hash range to reflect changes since the last scan
+  void update_range(
+    BackfillInterval *bi,        ///< [in,out] interval to update
+    ThreadPool::TPHandle &handle ///< [in] tp handle
+    );
+
   void prep_backfill_object_push(
     hobject_t oid, eversion_t v, eversion_t have, int peer,
     PGBackend::RecoveryHandle *h);

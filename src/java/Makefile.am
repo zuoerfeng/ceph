@@ -56,7 +56,7 @@ libcephfs.jar: $(CEPH_PROXY)
 javadir = $(datadir)/java
 java_DATA = libcephfs.jar
 
-CLEANFILES = -rf java/com/ceph/fs/*.class $(JAVA_H) libcephfs.jar 
+CLEANFILES = -rf java/com/ceph/fs/*.class java/com/ceph/crush/*.class $(JAVA_H) libcephfs.jar 
 
 BUILT_SOURCES = $(JAVA_H)
 

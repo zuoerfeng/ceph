@@ -274,6 +274,10 @@ COMMAND("mds compat rm_compat " \
 COMMAND("mds compat rm_incompat " \
 	"name=feature,type=CephInt,range=0", \
 	"remove incompatible feature", "mds", "rw", "cli,rest")
+COMMAND("mds allow_snaps " \
+        "name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \
+        "allow snapshots to be created in CephFS", \
+        "mds", "w", "cli,rest")
 COMMAND("mds add_data_pool " \
 	"name=poolid,type=CephInt,range=0", \
 	"add data pool <poolid>", "mds", "rw", "cli,rest")

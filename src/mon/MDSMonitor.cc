@@ -920,6 +920,17 @@ bool MDSMonitor::prepare_command(MMonCommand *m)
       r = 0;
     }
 
+  } else if (prefix == "mds allow_snaps") {
+    string sure;
+    cmd_getval(g_ceph_context, cmdmap, "sure", sure);
+    if (sure != "--yes-i-really-mean-it") {
+      ss << "Snapshots are unstable and will probably break your FS! Add --yes-i-really-mean-it if you are sure";
+      r = -EPERM;
+    } else {
+      pending_mdsmap.set_flag(CEPH_MDSMAP_ALLOW_SNAPS);
+      ss << "turned on snaps";
+      r = 0;
+    }
   } else if (prefix == "mds add_data_pool") {
     int64_t poolid;
     cmd_getval(g_ceph_context, cmdmap, "poolid", poolid);

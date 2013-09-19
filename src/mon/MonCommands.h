@@ -210,8 +210,8 @@ COMMAND("quorum_status", "report status of monitor quorum", \
 	"mon", "r", "cli,rest")
 COMMAND("mon_status", "report status of monitors", "mon", "r", "cli,rest")
 COMMAND("sync force " \
-	"name=validate1,type=CephChoices,strings=--yes-i-really-mean-it " \
-	"name=validate2,type=CephChoices,strings=--i-know-what-i-am-doing", \
+	"name=validate1,type=CephChoices,strings=--yes-i-really-mean-it,req=false " \
+	"name=validate2,type=CephChoices,strings=--i-know-what-i-am-doing,req=false", \
 	"force sync of and clear monitor store", "mon", "rw", "cli,rest")
 COMMAND("heap " \
 	"name=heapcmd,type=CephChoices,strings=dump|start_profiler|stop_profiler|release|stats", \
@@ -287,7 +287,7 @@ COMMAND("mds remove_data_pool " \
 COMMAND("mds newfs " \
 	"name=metadata,type=CephInt,range=0 " \
 	"name=data,type=CephInt,range=0 " \
-	"name=sure,type=CephChoices,strings=--yes-i-really-mean-it", \
+	"name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \
 	"make new filesystom using pools <metadata> and <data>", \
 	"mds", "rw", "cli,rest")
 /*
@@ -460,7 +460,7 @@ COMMAND("osd reweight " \
 	"reweight osd to 0.0 < <weight> < 1.0", "osd", "rw", "cli,rest")
 COMMAND("osd lost " \
 	"name=id,type=CephInt,range=0 " \
-	"name=sure,type=CephChoices,strings=--yes-i-really-mean-it", \
+	"name=sure,type=CephChoices,strings=--yes-i-really-mean-it,req=false", \
 	"mark osd as permanently lost. THIS DESTROYS DATA IF NO MORE REPLICAS EXIST, BE CAREFUL", \
 	"osd", "rw", "cli,rest")
 COMMAND("osd create " \

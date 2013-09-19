@@ -694,6 +694,8 @@ void pg_pool_t::dump(Formatter *f) const
     f->dump_string(name.c_str(), i->second);
   }
   f->close_section();
+  f->dump_unsigned("bloom_false_positive_probability", bloom_fpp);
+  f->dump_unsigned("bloom_period", bloom_period);
 }
 
 
@@ -898,7 +900,7 @@ void pg_pool_t::encode(bufferlist& bl, uint64_t features) const
     return;
   }
 
-  ENCODE_START(10, 5, bl);
+  ENCODE_START(11, 5, bl);
   ::encode(type, bl);
   ::encode(size, bl);
   ::encode(crush_ruleset, bl);
@@ -926,12 +928,14 @@ void pg_pool_t::encode(bufferlist& bl, uint64_t features) const
   ::encode(read_tier, bl);
   ::encode(write_tier, bl);
   ::encode(properties, bl);
+  ::encode(bloom_fpp, bl);
+  ::encode(bloom_period, bl);
   ENCODE_FINISH(bl);
 }
 
 void pg_pool_t::decode(bufferlist::iterator& bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(7, 5, 5, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(11, 5, 5, bl);
   ::decode(type, bl);
   ::decode(size, bl);
   ::decode(crush_ruleset, bl);
@@ -995,6 +999,13 @@ void pg_pool_t::decode(bufferlist::iterator& bl)
   }
   if (struct_v >= 10) {
     ::decode(properties, bl);
+  }
+  if (struct_v >= 11) {
+    ::decode(bloom_fpp, bl);
+    ::decode(bloom_period, bl);
+  } else {
+    bloom_fpp = 0;
+    bloom_period = 0;
   }
   DECODE_FINISH(bl);
   calc_pg_masks();

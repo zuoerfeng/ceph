@@ -856,13 +856,15 @@ public:
   int64_t write_tier;      ///< pool/tier for objecter to direct writes to
   cache_mode_t cache_mode;  ///< cache pool mode
 
-
   bool is_tier() const { return tier_of >= 0; }
   void clear_tier() { tier_of = -1; }
   bool has_read_tier() const { return read_tier >= 0; }
   void clear_read_tier() { read_tier = -1; }
   bool has_write_tier() const { return write_tier >= 0; }
   void clear_write_tier() { write_tier = -1; }
+
+  uint8_t bloom_fpp;      ///< if non-zero, the target false positive probability for bloom filters
+  uint32_t bloom_period;  ///< periodicity of bloom filter segments (seconds)
 
   pg_pool_t()
     : flags(0), type(0), size(0), min_size(0),
@@ -875,7 +877,9 @@ public:
       quota_max_bytes(0), quota_max_objects(0),
       pg_num_mask(0), pgp_num_mask(0),
       tier_of(-1), read_tier(-1), write_tier(-1),
-      cache_mode(CACHEMODE_NONE)
+      cache_mode(CACHEMODE_NONE),
+      bloom_fpp(0),
+      bloom_period(0)
   { }
 
   void dump(Formatter *f) const;

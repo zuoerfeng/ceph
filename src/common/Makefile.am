@@ -65,7 +65,8 @@ libcommon_la_SOURCES = \
 	common/ceph_strings.cc \
 	common/ceph_frag.cc \
 	common/addr_parsing.c \
-	common/hobject.cc
+	common/hobject.cc \
+	common/bloom_filter.cc
 
 # these should go out of libcommon
 libcommon_la_SOURCES += \

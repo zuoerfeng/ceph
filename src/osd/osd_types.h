@@ -1369,6 +1369,8 @@ struct pg_info_t {
   
   version_t last_user_version; // last user object version applied to store
 
+  eversion_t last_archived_bloom;   ///< last update in an archived bloom filter
+
   eversion_t log_tail;     // oldest log entry.
 
   hobject_t last_backfill;   // objects >= this and < last_complete may be missing
@@ -1415,6 +1417,8 @@ inline ostream& operator<<(ostream& out, const pg_info_t& pgi)
     out << " (" << pgi.log_tail << "," << pgi.last_update << "]";
     if (pgi.is_incomplete())
       out << " lb " << pgi.last_backfill;
+    if (pgi.last_archived_bloom != eversion_t())
+      out << " lab " << pgi.last_archived_bloom;
   }
   //out << " c " << pgi.epoch_created;
   out << " local-les=" << pgi.last_epoch_started;

@@ -1654,7 +1654,7 @@ void pg_history_t::generate_test_instances(list<pg_history_t*>& o)
 
 void pg_info_t::encode(bufferlist &bl) const
 {
-  ENCODE_START(28, 26, bl);
+  ENCODE_START(29, 26, bl);
   ::encode(pgid, bl);
   ::encode(last_update, bl);
   ::encode(last_complete, bl);
@@ -1665,12 +1665,13 @@ void pg_info_t::encode(bufferlist &bl) const
   ::encode(purged_snaps, bl);
   ::encode(last_epoch_started, bl);
   ::encode(last_user_version, bl);
+  ::encode(last_archived_bloom, bl);
   ENCODE_FINISH(bl);
 }
 
 void pg_info_t::decode(bufferlist::iterator &bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(28, 26, 26, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(29, 26, 26, bl);
   if (struct_v < 23) {
     old_pg_t opgid;
     ::decode(opgid, bl);
@@ -1704,6 +1705,10 @@ void pg_info_t::decode(bufferlist::iterator &bl)
     ::decode(last_user_version, bl);
   else
     last_user_version = last_update.version;
+  if (struct_v >= 29)
+    ::decode(last_archived_bloom, bl);
+  else
+    last_archived_bloom = eversion_t();
   DECODE_FINISH(bl);
 }
 
@@ -1729,6 +1734,7 @@ void pg_info_t::dump(Formatter *f) const
   f->dump_int("dne", dne());
   f->dump_int("incomplete", is_incomplete());
   f->dump_int("last_epoch_started", last_epoch_started);
+  f->dump_stream("last_archived_bloom") << last_archived_bloom;
 }
 
 void pg_info_t::generate_test_instances(list<pg_info_t*>& o)

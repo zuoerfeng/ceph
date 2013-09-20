@@ -75,7 +75,7 @@ int IndexManager::init_index(coll_t c, const char *path, uint32_t version) {
     return r;
   HashIndex index(c, path, g_conf->filestore_merge_threshold,
 		  g_conf->filestore_split_multiple,
-		  CollectionIndex::HOBJECT_WITH_POOL,
+		  version,
 		  g_conf->filestore_index_retry_probability);
   return index.init();
 }

@@ -298,6 +298,7 @@ public:
   }
   hobject_t    log_oid;
   hobject_t    biginfo_oid;
+  hobject_t    bloom_oid;
   map<hobject_t, set<int> > missing_loc;
   set<int> missing_loc_sources;           // superset of missing_loc locations
   
@@ -1619,7 +1620,7 @@ public:
 
  public:
   PG(OSDService *o, OSDMapRef curmap,
-     const PGPool &pool, pg_t p, const hobject_t& loid, const hobject_t& ioid);
+     const PGPool &pool, pg_t p, const hobject_t& loid, const hobject_t& ioid, const hobject_t& boid);
   virtual ~PG();
 
  private:

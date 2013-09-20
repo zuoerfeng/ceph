@@ -625,9 +625,11 @@ void ReplicatedPG::calc_trim_to()
 }
 
 ReplicatedPG::ReplicatedPG(OSDService *o, OSDMapRef curmap,
-			   const PGPool &_pool, pg_t p, const hobject_t& oid,
-			   const hobject_t& ioid) :
-  PG(o, curmap, _pool, p, oid, ioid),
+			   const PGPool &_pool, pg_t p,
+			   const hobject_t& oid,
+			   const hobject_t& ioid,
+			   const hobject_t& boid) :
+  PG(o, curmap, _pool, p, oid, ioid, boid),
   snapset_contexts_lock("ReplicatedPG::snapset_contexts"),
   temp_created(false),
   temp_coll(coll_t::make_temp_coll(p)),

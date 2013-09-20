@@ -821,8 +821,10 @@ protected:
 
 public:
   ReplicatedPG(OSDService *o, OSDMapRef curmap,
-	       const PGPool &_pool, pg_t p, const hobject_t& oid,
-	       const hobject_t& ioid);
+	       const PGPool &_pool, pg_t p,
+	       const hobject_t& oid,
+	       const hobject_t& ioid,
+	       const hobject_t& boid);
   ~ReplicatedPG() {}
 
   int do_command(cmdmap_t cmdmap, ostream& ss, bufferlist& idata,

@@ -141,7 +141,8 @@ void PGPool::update(OSDMapRef map)
 
 PG::PG(OSDService *o, OSDMapRef curmap,
        const PGPool &_pool, pg_t p, const hobject_t& loid,
-       const hobject_t& ioid) :
+       const hobject_t& ioid,
+       const hobject_t& boid) :
   osd(o),
   cct(o->cct),
   osdriver(osd->store, coll_t(), OSD::make_snapmapper_oid()),
@@ -160,7 +161,8 @@ PG::PG(OSDService *o, OSDMapRef curmap,
   deleting(false), dirty_info(false), dirty_big_info(false),
   info(p),
   info_struct_v(0),
-  coll(p), pg_log(cct), log_oid(loid), biginfo_oid(ioid),
+  coll(p), pg_log(cct),
+  log_oid(loid), biginfo_oid(ioid), bloom_oid(boid),
   recovery_item(this), scrub_item(this), scrub_finalize_item(this), snap_trim_item(this), stat_queue_item(this),
   recovery_ops_active(0),
   waiting_on_backfill(0),

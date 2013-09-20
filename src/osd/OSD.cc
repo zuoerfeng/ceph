@@ -1826,10 +1826,11 @@ PG* OSD::_make_pg(
 
   // create
   PG *pg;
-  hobject_t logoid = make_pg_log_oid(pgid);
-  hobject_t infooid = make_pg_biginfo_oid(pgid);
   if (createmap->get_pg_type(pgid) == pg_pool_t::TYPE_REP)
-    pg = new ReplicatedPG(&service, createmap, pool, pgid, logoid, infooid);
+    pg = new ReplicatedPG(&service, createmap, pool, pgid,
+			  make_pg_log_oid(pgid),
+			  make_pg_biginfo_oid(pgid),
+			  make_pg_bloom_oid(pgid));
   else 
     assert(0);
 

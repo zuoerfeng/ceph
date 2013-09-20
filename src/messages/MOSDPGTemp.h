@@ -21,6 +21,7 @@
 
 class MOSDPGTemp : public PaxosServiceMessage {
  public:
+   static const int MESSAGE_ID = MSG_OSD_PGTEMP;
   epoch_t map_epoch;
   map<pg_t, vector<int> > pg_temp;
 

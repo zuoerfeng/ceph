@@ -24,6 +24,7 @@ class MOSDFailure : public PaxosServiceMessage {
   static const int HEAD_VERSION = 3;
 
  public:
+   static const int MESSAGE_ID = MSG_OSD_FAILURE;
   uuid_d fsid;
   entity_inst_t target_osd;
   __u8 is_failed;

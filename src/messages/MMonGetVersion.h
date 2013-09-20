@@ -27,6 +27,7 @@
  */
 class MMonGetVersion : public Message {
 public:
+  static const int MESSAGE_ID = CEPH_MSG_MON_GET_VERSION;
   MMonGetVersion() : Message(CEPH_MSG_MON_GET_VERSION) {}
 
   const char *get_type_name() const {

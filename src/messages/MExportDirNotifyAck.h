@@ -23,6 +23,7 @@ class MExportDirNotifyAck : public Message {
   dirfrag_t dirfrag;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIRNOTIFYACK;
   dirfrag_t get_dirfrag() { return dirfrag; }
   
   MExportDirNotifyAck() {}

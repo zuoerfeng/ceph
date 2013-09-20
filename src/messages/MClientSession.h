@@ -19,6 +19,7 @@
 
 class MClientSession : public Message {
 public:
+  static const int MESSAGE_ID = CEPH_MSG_CLIENT_SESSION;
   ceph_mds_session_head head;
 
   int get_op() const { return head.op; }

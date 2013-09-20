@@ -21,6 +21,7 @@
 
 class MMDSSlaveRequest : public Message {
  public:
+   static const int MESSAGE_ID = MSG_MDS_SLAVE_REQUEST;
   static const int OP_XLOCK =       1;
   static const int OP_XLOCKACK =   -1;
   static const int OP_UNXLOCK =     2;

@@ -22,6 +22,7 @@ class MExportDirCancel : public Message {
   dirfrag_t dirfrag;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIRCANCEL;
   dirfrag_t get_dirfrag() { return dirfrag; }
 
   MExportDirCancel() : Message(MSG_MDS_EXPORTDIRCANCEL) {}

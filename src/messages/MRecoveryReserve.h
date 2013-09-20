@@ -21,6 +21,7 @@ class MRecoveryReserve : public Message {
   static const int HEAD_VERSION = 1;
   static const int COMPAT_VERSION = 1;
 public:
+  static const int MESSAGE_ID = MSG_OSD_RECOVERY_RESERVE;
   pg_t pgid;
   epoch_t query_epoch;
   enum {

@@ -23,6 +23,7 @@ class MDentryLink : public Message {
   bool is_primary;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_DENTRYLINK;
   dirfrag_t get_subtree() { return subtree; }
   dirfrag_t get_dirfrag() { return dirfrag; }
   string& get_dn() { return dn; }

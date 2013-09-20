@@ -31,6 +31,7 @@ class MLock : public Message {
   bufferlist lockdata;  // and possibly some data
   
 public:
+  static const int MESSAGE_ID = MSG_MDS_LOCK;
   bufferlist& get_data() { return lockdata; }
   int get_asker() { return asker; }
   int get_action() { return action; }

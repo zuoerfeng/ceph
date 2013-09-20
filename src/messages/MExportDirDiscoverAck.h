@@ -23,6 +23,7 @@ class MExportDirDiscoverAck : public Message {
   bool success;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIRDISCOVERACK;
   inodeno_t get_ino() { return dirfrag.ino; }
   dirfrag_t get_dirfrag() { return dirfrag; }
   bool is_success() { return success; }

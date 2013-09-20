@@ -20,6 +20,7 @@
 
 class MClientCapRelease : public Message {
  public:
+   static const int MESSAGE_ID = CEPH_MSG_CLIENT_CAPRELEASE;
   struct ceph_mds_cap_release head;
   vector<ceph_mds_cap_item> caps;
 

@@ -21,6 +21,7 @@
 
 class MStatfs : public PaxosServiceMessage {
 public:
+  static const int MESSAGE_ID = CEPH_MSG_STATFS;
   uuid_d fsid;
 
   MStatfs() : PaxosServiceMessage(CEPH_MSG_STATFS, 0) {}

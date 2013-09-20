@@ -19,6 +19,7 @@
 
 class MOSDPGTrim : public Message {
 public:
+  static const int MESSAGE_ID = MSG_OSD_PG_TRIM;
   epoch_t epoch;
   pg_t pgid;
   eversion_t trim_to;

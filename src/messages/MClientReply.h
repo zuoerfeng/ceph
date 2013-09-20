@@ -183,6 +183,7 @@ struct InodeStat {
 class MClientReply : public Message {
   // reply data
 public:
+  static const int MESSAGE_ID = CEPH_MSG_CLIENT_REPLY;
   struct ceph_mds_reply_head head;
   bufferlist trace_bl;
   bufferlist extra_bl;

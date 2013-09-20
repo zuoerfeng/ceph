@@ -24,6 +24,7 @@ class MOSDPGPush : public Message {
 
 
 public:
+  static const int MESSAGE_ID = MSG_OSD_PG_PUSH;
   pg_t pgid;
   epoch_t map_epoch;
   vector<PushOp> pushes;

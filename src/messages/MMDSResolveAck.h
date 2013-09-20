@@ -22,6 +22,7 @@
 
 class MMDSResolveAck : public Message {
  public:
+   static const int MESSAGE_ID = MSG_MDS_RESOLVEACK;
   vector<metareqid_t> commit;
   vector<metareqid_t> abort;
 

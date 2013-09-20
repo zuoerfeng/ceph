@@ -25,6 +25,7 @@ class MHeartbeat : public Message {
   map<__s32, float> import_map;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_HEARTBEAT;
   mds_load_t& get_load() { return load; }
   int get_beat() { return beat; }
 

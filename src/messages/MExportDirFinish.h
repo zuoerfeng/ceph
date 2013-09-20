@@ -21,6 +21,7 @@ class MExportDirFinish : public Message {
   dirfrag_t dirfrag;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIRFINISH;
   dirfrag_t get_dirfrag() { return dirfrag; }
   
   MExportDirFinish() {}

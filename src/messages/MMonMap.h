@@ -21,6 +21,7 @@
 
 class MMonMap : public Message {
 public:
+  static const int MESSAGE_ID = CEPH_MSG_MON_MAP;
   bufferlist monmapbl;
 
   MMonMap() : Message(CEPH_MSG_MON_MAP) { }

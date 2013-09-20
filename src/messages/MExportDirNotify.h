@@ -26,6 +26,7 @@ class MExportDirNotify : public Message {
   list<dirfrag_t> bounds;  // bounds; these dirs are _not_ included (tho the dirfragdes are)
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIRNOTIFY;
   dirfrag_t get_dirfrag() { return base; }
   pair<__s32,__s32> get_old_auth() { return old_auth; }
   pair<__s32,__s32> get_new_auth() { return new_auth; }

@@ -21,6 +21,7 @@
 
 class MOSDAlive : public PaxosServiceMessage {
  public:
+   static const int MESSAGE_ID = MSG_OSD_ALIVE;
   epoch_t want;
 
   MOSDAlive(epoch_t h, epoch_t w) : PaxosServiceMessage(MSG_OSD_ALIVE, h), want(w) { }

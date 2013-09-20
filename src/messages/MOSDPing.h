@@ -27,6 +27,7 @@ class MOSDPing : public Message {
   static const int COMPAT_VERSION = 1;
 
  public:
+   static const int MESSAGE_ID = MSG_OSD_PING;
   enum {
     HEARTBEAT = 0,
     START_HEARTBEAT = 1,

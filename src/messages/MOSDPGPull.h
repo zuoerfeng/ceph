@@ -24,6 +24,7 @@ class MOSDPGPull : public Message {
 
 
 public:
+  static const int MESSAGE_ID = MSG_OSD_PG_PULL;
   pg_t pgid;
   epoch_t map_epoch;
   vector<PullOp> pulls;

@@ -31,6 +31,7 @@ class MOSDPGLog : public Message {
   epoch_t query_epoch;
 
 public:
+  static const int MESSAGE_ID = MSG_OSD_PG_LOG;
   pg_info_t info;
   pg_log_t log;
   pg_missing_t missing;

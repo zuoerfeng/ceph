@@ -26,6 +26,7 @@ class MOSDPGInfo : public Message {
   epoch_t epoch;
 
 public:
+  static const int MESSAGE_ID = MSG_OSD_PG_INFO;
   vector<pair<pg_notify_t,pg_interval_map_t> > pg_list;
 
   epoch_t get_epoch() { return epoch; }

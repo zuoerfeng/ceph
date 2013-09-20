@@ -22,6 +22,7 @@
 class MExportDirPrep : public Message {
   dirfrag_t dirfrag;
  public:
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIRPREP;
   bufferlist basedir;
   list<dirfrag_t> bounds;
   list<bufferlist> traces;

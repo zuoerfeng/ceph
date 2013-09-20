@@ -47,6 +47,7 @@ class MOSDOpReply : public Message {
   request_redirect_t redirect;
 
 public:
+  static const int MESSAGE_ID = CEPH_MSG_OSD_OPREPLY;
   object_t get_oid() const { return oid; }
   pg_t     get_pg() const { return pgid; }
   int      get_flags() const { return flags; }

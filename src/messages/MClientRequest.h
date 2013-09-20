@@ -47,6 +47,7 @@
 
 class MClientRequest : public Message {
 public:
+  static const int MESSAGE_ID = CEPH_MSG_CLIENT_REQUEST;
   struct ceph_mds_request_head head;
 
   struct Release {

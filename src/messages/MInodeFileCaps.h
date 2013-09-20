@@ -21,6 +21,7 @@ class MInodeFileCaps : public Message {
   __u32     caps;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_INODEFILECAPS;
   inodeno_t get_ino() { return ino; }
   int       get_caps() { return caps; }
 

@@ -22,6 +22,7 @@ class MOSDMarkMeDown : public PaxosServiceMessage {
   static const int HEAD_VERSION = 1;
 
  public:
+   static const int MESSAGE_ID = MSG_OSD_MARK_ME_DOWN;
   uuid_d fsid;
   entity_inst_t target_osd;
   epoch_t epoch;

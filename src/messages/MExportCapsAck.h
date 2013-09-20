@@ -21,6 +21,7 @@
 
 class MExportCapsAck : public Message {
  public:  
+   static const int MESSAGE_ID = MSG_MDS_EXPORTCAPSACK;
   inodeno_t ino;
 
   MExportCapsAck() :

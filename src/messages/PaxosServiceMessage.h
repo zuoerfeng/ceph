@@ -6,6 +6,7 @@
 
 class PaxosServiceMessage : public Message {
  public:
+   static const int MESSAGE_ID = MSG_PAXOS;
   version_t version;
   __s16 deprecated_session_mon;
   uint64_t deprecated_session_mon_tid;

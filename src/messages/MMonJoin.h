@@ -22,6 +22,7 @@ using std::vector;
 
 class MMonJoin : public PaxosServiceMessage {
  public:
+   static const int MESSAGE_ID = MSG_MON_JOIN;
   uuid_d fsid;
   string name;
   entity_addr_t addr;

@@ -21,6 +21,7 @@
 
 class MMDSResolve : public Message {
  public:
+   static const int MESSAGE_ID = MSG_MDS_RESOLVE;
   map<dirfrag_t, vector<dirfrag_t> > subtrees;
   map<dirfrag_t, vector<dirfrag_t> > ambiguous_imports;
   vector<metareqid_t> slave_requests;

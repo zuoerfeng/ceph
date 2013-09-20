@@ -21,6 +21,7 @@
 
 class MMonGetMap : public Message {
  public:
+   static const int MESSAGE_ID = CEPH_MSG_MON_GET_MAP;
   MMonGetMap() : Message(CEPH_MSG_MON_GET_MAP) { }
 private:
   ~MMonGetMap() {}

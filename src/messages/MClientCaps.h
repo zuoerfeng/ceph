@@ -25,6 +25,7 @@ class MClientCaps : public Message {
   static const int COMPAT_VERSION = 1;
 
  public:
+   static const int MESSAGE_ID = CEPH_MSG_CLIENT_CAPS;
   struct ceph_mds_caps head;
   bufferlist snapbl;
   bufferlist xattrbl;

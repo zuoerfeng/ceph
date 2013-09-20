@@ -25,6 +25,7 @@ class MOSDMap : public Message {
   static const int HEAD_VERSION = 3;
 
  public:
+   static const int MESSAGE_ID = CEPH_MSG_OSD_MAP;
   uuid_d fsid;
   map<epoch_t, bufferlist> maps;
   map<epoch_t, bufferlist> incremental_maps;

@@ -22,6 +22,7 @@ class MOSDPGMissing : public Message {
   epoch_t epoch;
 
 public:
+  static const int MESSAGE_ID = MSG_OSD_PG_MISSING;
   pg_info_t info;
   pg_missing_t missing;
 

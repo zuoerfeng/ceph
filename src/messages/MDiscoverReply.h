@@ -87,6 +87,7 @@ class MDiscoverReply : public Message {
   __s32 dir_auth_hint;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_DISCOVERREPLY;
   __u8 starts_with;
   bufferlist trace;
 

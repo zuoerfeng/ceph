@@ -19,6 +19,7 @@
 
 class MPoolOpReply : public PaxosServiceMessage {
 public:
+  static const int MESSAGE_ID = CEPH_MSG_POOLOP_REPLY;
   uuid_d fsid;
   __u32 replyCode;
   epoch_t epoch;

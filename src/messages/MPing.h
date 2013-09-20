@@ -22,6 +22,7 @@
 
 class MPing : public Message {
  public:
+   static const int MESSAGE_ID = CEPH_MSG_PING;
   MPing() : Message(CEPH_MSG_PING) {}
 private:
   ~MPing() {}

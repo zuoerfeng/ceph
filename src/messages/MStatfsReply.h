@@ -18,6 +18,7 @@
 
 class MStatfsReply : public Message {
 public:
+  static const int MESSAGE_ID = CEPH_MSG_STATFS_REPLY;
   struct ceph_mon_statfs_reply h;
 
   MStatfsReply() : Message(CEPH_MSG_STATFS_REPLY) {}

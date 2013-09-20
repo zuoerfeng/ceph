@@ -24,6 +24,7 @@ using std::map;
 
 class MMDSLoadTargets : public PaxosServiceMessage {
  public:
+   static const int MESSAGE_ID = MSG_MDS_OFFLOAD_TARGETS;
   uint64_t global_id;
   set<int32_t> targets;
 

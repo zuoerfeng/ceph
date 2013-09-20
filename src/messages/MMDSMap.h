@@ -24,6 +24,7 @@
 
 class MMDSMap : public Message {
  public:
+   static const int MESSAGE_ID = CEPH_MSG_MDS_MAP;
   /*
   map<epoch_t, bufferlist> maps;
   map<epoch_t, bufferlist> incremental_maps;

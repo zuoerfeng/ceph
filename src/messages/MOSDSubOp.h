@@ -29,6 +29,7 @@ class MOSDSubOp : public Message {
   static const int COMPAT_VERSION = 1;
 
 public:
+  static const int MESSAGE_ID = MSG_OSD_SUBOP;
   epoch_t map_epoch;
   
   // metadata from original request

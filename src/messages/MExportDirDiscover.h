@@ -24,6 +24,7 @@ class MExportDirDiscover : public Message {
   filepath path;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIRDISCOVER;
   int get_source_mds() { return from; }
   inodeno_t get_ino() { return dirfrag.ino; }
   dirfrag_t get_dirfrag() { return dirfrag; }

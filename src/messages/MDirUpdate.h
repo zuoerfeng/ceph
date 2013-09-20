@@ -27,6 +27,7 @@ class MDirUpdate : public Message {
   filepath path;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_DIRUPDATE;
   int get_source_mds() const { return from_mds; }
   dirfrag_t get_dirfrag() const { return dirfrag; }
   int get_dir_rep() const { return dir_rep; }

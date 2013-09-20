@@ -21,6 +21,7 @@
 
 class MExportDir : public Message {
  public:  
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIR;
   dirfrag_t dirfrag;
   bufferlist export_data;
   vector<dirfrag_t> bounds;

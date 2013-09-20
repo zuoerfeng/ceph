@@ -19,6 +19,7 @@
 
 class MLogAck : public Message {
 public:
+  static const int MESSAGE_ID = MSG_LOGACK;
   uuid_d fsid;
   version_t last;
   

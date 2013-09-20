@@ -25,6 +25,7 @@ class MMonElection : public Message {
   static const int COMPAT_VERSION = 2;
 
 public:
+  static const int MESSAGE_ID = MSG_MON_ELECTION;
   static const int OP_PROPOSE = 1;
   static const int OP_ACK     = 2;
   static const int OP_NAK     = 3;

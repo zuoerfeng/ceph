@@ -23,6 +23,7 @@ class MOSDPGRemove : public Message {
   epoch_t epoch;
 
  public:
+   static const int MESSAGE_ID = MSG_OSD_PG_REMOVE;
   vector<pg_t> pg_list;
 
   epoch_t get_epoch() { return epoch; }

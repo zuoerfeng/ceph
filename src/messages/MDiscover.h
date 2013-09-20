@@ -36,6 +36,7 @@ class MDiscover : public Message {
   bool want_xlocked;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_DISCOVER;
   inodeno_t get_base_ino() { return base_ino; }
   frag_t    get_base_dir_frag() { return base_dir_frag; }
   snapid_t  get_snapid() { return snapid; }

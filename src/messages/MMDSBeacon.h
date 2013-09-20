@@ -39,6 +39,7 @@ class MMDSBeacon : public PaxosServiceMessage {
   CompatSet compat;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_BEACON;
   MMDSBeacon() : PaxosServiceMessage(MSG_MDS_BEACON, 0, HEAD_VERSION) { }
   MMDSBeacon(const uuid_d &f, uint64_t g, string& n, epoch_t les, int st, version_t se) : 
     PaxosServiceMessage(MSG_MDS_BEACON, les, HEAD_VERSION), 

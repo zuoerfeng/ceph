@@ -22,6 +22,7 @@ class MClientRequestForward : public Message {
   bool client_must_resend;
 
  public:
+   static const int MESSAGE_ID = CEPH_MSG_CLIENT_REQUEST_FORWARD;
   MClientRequestForward()
     : Message(CEPH_MSG_CLIENT_REQUEST_FORWARD),
       dest_mds(-1), num_fwd(-1), client_must_resend(false) {}

@@ -21,6 +21,7 @@
 
 class MWatchNotify : public Message {
  public:
+   static const int MESSAGE_ID = CEPH_MSG_WATCH_NOTIFY;
   uint64_t cookie;
   uint64_t ver;
   uint64_t notify_id;

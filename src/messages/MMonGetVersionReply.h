@@ -29,6 +29,7 @@ class MMonGetVersionReply : public Message {
   static const int HEAD_VERSION = 2;
 
 public:
+  static const int MESSAGE_ID = CEPH_MSG_MON_GET_VERSION_REPLY;
   MMonGetVersionReply() : Message(CEPH_MSG_MON_GET_VERSION_REPLY, HEAD_VERSION) { }
 
   const char *get_type_name() const {

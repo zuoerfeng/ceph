@@ -21,6 +21,7 @@ class MExportDirAck : public Message {
   dirfrag_t dirfrag;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIRACK;
   dirfrag_t get_dirfrag() { return dirfrag; }
   
   MExportDirAck() : Message(MSG_MDS_EXPORTDIRACK) {}

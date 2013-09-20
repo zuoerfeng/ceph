@@ -22,6 +22,7 @@ class MExportDirPrepAck : public Message {
   dirfrag_t dirfrag;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_EXPORTDIRPREPACK;
   dirfrag_t get_dirfrag() { return dirfrag; }
   
   MExportDirPrepAck() {}

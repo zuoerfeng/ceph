@@ -25,6 +25,7 @@ class MClientReconnect : public Message {
   const static int HEAD_VERSION = 3;
 
 public:
+  static const int MESSAGE_ID = CEPH_MSG_CLIENT_RECONNECT;
   map<inodeno_t, cap_reconnect_t>  caps;   // only head inodes
   vector<ceph_mds_snaprealm_reconnect> realms;
 

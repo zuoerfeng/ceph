@@ -20,6 +20,7 @@
 
 class MOSDPGScan : public Message {
 public:
+  static const int MESSAGE_ID = MSG_OSD_PG_SCAN;
   enum {
     OP_SCAN_GET_DIGEST = 1,      // just objects and versions
     OP_SCAN_DIGEST = 2,          // result

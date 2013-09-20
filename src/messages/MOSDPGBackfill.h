@@ -22,6 +22,7 @@ class MOSDPGBackfill : public Message {
   static const int HEAD_VERSION = 2;
   static const int COMPAT_VERSION = 1;
 public:
+  static const int MESSAGE_ID = MSG_OSD_PG_BACKFILL;
   enum {
     OP_BACKFILL_PROGRESS = 2,
     OP_BACKFILL_FINISH = 3,

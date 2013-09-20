@@ -19,6 +19,7 @@
 
 class MMonCommandAck : public PaxosServiceMessage {
  public:
+   static const int MESSAGE_ID = MSG_MON_COMMAND_ACK;
   vector<string> cmd;
   __s32 r;
   string rs;

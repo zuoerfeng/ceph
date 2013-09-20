@@ -26,6 +26,7 @@ class MMonPaxos : public Message {
   static const int COMPAT_VERSION = 3;
 
  public:
+   static const int MESSAGE_ID = MSG_MON_PAXOS;
   // op types
   const static int OP_COLLECT =   1; // proposer: propose round
   const static int OP_LAST =      2; // voter:    accept proposed round

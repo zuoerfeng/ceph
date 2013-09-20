@@ -21,6 +21,7 @@
 
 class MMDSTableRequest : public Message {
  public:
+   static const int MESSAGE_ID = MSG_MDS_TABLE_REQUEST;
   __u16 table;
   __s16 op;
   uint64_t reqid;

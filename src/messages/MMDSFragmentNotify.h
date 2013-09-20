@@ -25,6 +25,7 @@ class MMDSFragmentNotify : public Message {
   int8_t bits;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_FRAGMENTNOTIFY;
   inodeno_t get_ino() { return ino; }
   frag_t get_basefrag() { return basefrag; }
   int get_bits() { return bits; }

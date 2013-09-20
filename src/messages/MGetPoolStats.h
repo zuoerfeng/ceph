@@ -22,6 +22,7 @@
 
 class MGetPoolStats : public PaxosServiceMessage {
 public:
+  static const int MESSAGE_ID = MSG_GETPOOLSTATS;
   uuid_d fsid;
   list<string> pools;
 

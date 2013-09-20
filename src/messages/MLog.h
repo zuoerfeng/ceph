@@ -23,6 +23,7 @@
 
 class MLog : public PaxosServiceMessage {
 public:
+  static const int MESSAGE_ID = MSG_LOG;
   uuid_d fsid;
   std::deque<LogEntry> entries;
   

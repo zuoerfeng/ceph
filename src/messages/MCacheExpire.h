@@ -21,6 +21,7 @@ class MCacheExpire : public Message {
   __s32 from;
 
 public:
+  static const int MESSAGE_ID = MSG_MDS_CACHEEXPIRE;
   /*
     group things by realm (auth delgation root), since that's how auth is determined.
     that makes it less work to process when exports are in progress.

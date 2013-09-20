@@ -24,6 +24,7 @@ class MPoolOp : public PaxosServiceMessage {
   static const int COMPAT_VERSION = 2;
 
 public:
+  static const int MESSAGE_ID = CEPH_MSG_POOLOP;
   uuid_d fsid;
   __u32 pool;
   string name;

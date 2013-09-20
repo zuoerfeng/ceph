@@ -28,6 +28,7 @@ class MOSDPGQuery : public Message {
   version_t       epoch;
 
  public:
+   static const int MESSAGE_ID = MSG_OSD_PG_QUERY;
   version_t get_epoch() { return epoch; }
   map<pg_t,pg_query_t>  pg_list;
 

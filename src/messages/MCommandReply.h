@@ -20,6 +20,7 @@
 
 class MCommandReply : public Message {
  public:
+   static const int MESSAGE_ID = MSG_COMMAND_REPLY;
   __s32 r;
   string rs;
   

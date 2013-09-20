@@ -47,6 +47,7 @@ private:
   object_locator_t oloc;
   pg_t pgid;
 public:
+  static const int MESSAGE_ID = CEPH_MSG_OSD_OP;
   vector<OSDOp> ops;
 private:
 

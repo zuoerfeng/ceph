@@ -23,6 +23,7 @@ class MOSDPGPushReply : public Message {
   static const int COMPAT_VERSION = 1;
 
 public:
+  static const int MESSAGE_ID = MSG_OSD_PG_PUSH_REPLY;
   pg_t pgid;
   epoch_t map_epoch;
   vector<PushReplyOp> replies;

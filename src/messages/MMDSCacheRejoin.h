@@ -30,6 +30,7 @@ class MMDSCacheRejoin : public Message {
   static const int COMPAT_VERSION = 1;
 
  public:
+   static const int MESSAGE_ID = MSG_MDS_CACHEREJOIN;
   static const int OP_WEAK    = 1;  // replica -> auth, i exist, + maybe open files.
   static const int OP_STRONG  = 2;  // replica -> auth, i exist, + open files and lock state.
   static const int OP_ACK     = 3;  // auth -> replica, here is your lock state.

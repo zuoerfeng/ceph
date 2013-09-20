@@ -21,6 +21,7 @@
 
 class MExportCaps : public Message {
  public:  
+   static const int MESSAGE_ID = MSG_MDS_EXPORTCAPS;
   inodeno_t ino;
   bufferlist cap_bl;
   map<client_t,entity_inst_t> client_map;

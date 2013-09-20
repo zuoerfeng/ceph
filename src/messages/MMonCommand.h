@@ -22,6 +22,7 @@ using std::vector;
 
 class MMonCommand : public PaxosServiceMessage {
  public:
+   static const int MESSAGE_ID = MSG_MON_COMMAND;
   uuid_d fsid;
   vector<string> cmd;
 

@@ -31,6 +31,7 @@
 
 class MOSDSubOpReply : public Message {
 public:
+  static const int MESSAGE_ID = MSG_OSD_SUBOPREPLY;
   epoch_t map_epoch;
   
   // subop metadata

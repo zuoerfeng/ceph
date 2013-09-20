@@ -22,6 +22,7 @@
 #include "osd_types.h"
 #include "os/ObjectStore.h"
 #include "common/ceph_context.h"
+#include "common/bloom_filter.hpp"
 #include <list>
 using namespace std;
 
@@ -163,6 +164,10 @@ protected:
   eversion_t writeout_from;    ///< must writout keys past writeout_from
   set<eversion_t> trimmed;     ///< must clear keys in trimmed
   bool dirty_divergent_priors;
+
+  bloom_filter *bloom_current;  ///< currently accumulating bloom filter
+  eversion_t bloom_last;        ///< last version registered in bloom filter
+
   CephContext *cct;
 
   bool is_dirty() const {
@@ -238,7 +243,10 @@ public:
     pg_log_debug(!(cct && !(cct->_conf->osd_debug_pg_log_writeout))),
     touched_log(false), dirty_from(eversion_t::max()),
     writeout_from(eversion_t::max()),
-    dirty_divergent_priors(false), cct(cct) {}
+    dirty_divergent_priors(false),
+    bloom_current(NULL),
+    cct(cct)
+  {}
 
 
   void reset_backfill();

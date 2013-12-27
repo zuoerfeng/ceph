@@ -173,6 +173,22 @@ int FileStore::lfn_find(coll_t cid, const ghobject_t& oid, IndexedPath *path)
   return 0;
 }
 
+bool FileStore::lfn_check(coll_t cid, const ghobject_t& oid)
+{
+  if (existing_cache.is_exist(cid, oid))
+    return true;
+
+  IndexedPath path;
+  int r;
+
+  r = lfn_find(cid, oid, &path);
+  if (r < 0)
+    return false;
+
+  existing_cache.set_exist(cid, oid);
+  return true;
+}
+
 int FileStore::lfn_truncate(coll_t cid, const ghobject_t& oid, off_t length)
 {
   IndexedPath path;
@@ -340,6 +356,9 @@ int FileStore::lfn_unlink(coll_t cid, const ghobject_t& o,
   int r = get_index(cid, &index);
   if (r < 0)
     return r;
+
+  existing_cache.set_nonexist(cid, o);
+
   Mutex::Locker l(fdcache_lock);
   {
     IndexedPath path;
@@ -393,6 +412,7 @@ FileStore::FileStore(const std::string &base, const std::string &jdev, const cha
   fsid_fd(-1), op_fd(-1),
   basedir_fd(-1), current_fd(-1),
   generic_backend(NULL), backend(NULL),
+  existing_cache(),
   index_manager(do_update),
   ondisk_finisher(g_ceph_context),
   lock("FileStore::lock"),
@@ -1434,6 +1454,8 @@ int FileStore::mount()
       goto close_current_fd;
     }
   }
+
+  existing_cache.clear_all();
 
   journal_start();
 
@@ -4085,8 +4107,7 @@ int FileStore::omap_get(coll_t c, const ghobject_t &hoid,
 			map<string, bufferlist> *out)
 {
   dout(15) << __func__ << " " << c << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(c, hoid, &path);
+  int r = lfn_check(c, hoid);
   if (r < 0)
     return r;
   r = object_map->get(hoid, header, out);
@@ -4104,8 +4125,7 @@ int FileStore::omap_get_header(
   bool allow_eio)
 {
   dout(15) << __func__ << " " << c << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(c, hoid, &path);
+  int r = lfn_check(c, hoid);
   if (r < 0)
     return r;
   r = object_map->get_header(hoid, bl);
@@ -4119,8 +4139,7 @@ int FileStore::omap_get_header(
 int FileStore::omap_get_keys(coll_t c, const ghobject_t &hoid, set<string> *keys)
 {
   dout(15) << __func__ << " " << c << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(c, hoid, &path);
+  int r = lfn_check(c, hoid);
   if (r < 0)
     return r;
   r = object_map->get_keys(hoid, keys);
@@ -4136,8 +4155,7 @@ int FileStore::omap_get_values(coll_t c, const ghobject_t &hoid,
 			       map<string, bufferlist> *out)
 {
   dout(15) << __func__ << " " << c << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(c, hoid, &path);
+  int r = lfn_check(c, hoid);
   if (r < 0)
     return r;
   r = object_map->get_values(hoid, keys, out);
@@ -4153,8 +4171,7 @@ int FileStore::omap_check_keys(coll_t c, const ghobject_t &hoid,
 			       set<string> *out)
 {
   dout(15) << __func__ << " " << c << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(c, hoid, &path);
+  int r = lfn_check(c, hoid);
   if (r < 0)
     return r;
   r = object_map->check_keys(hoid, keys, out);
@@ -4169,8 +4186,7 @@ ObjectMap::ObjectMapIterator FileStore::get_omap_iterator(coll_t c,
 							  const ghobject_t &hoid)
 {
   dout(15) << __func__ << " " << c << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(c, hoid, &path);
+  int r = lfn_check(c, hoid);
   if (r < 0)
     return ObjectMap::ObjectMapIterator();
   return object_map->get_iterator(hoid);
@@ -4376,8 +4392,7 @@ void FileStore::_inject_failure()
 int FileStore::_omap_clear(coll_t cid, const ghobject_t &hoid,
 			   const SequencerPosition &spos) {
   dout(15) << __func__ << " " << cid << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(cid, hoid, &path);
+  int r = lfn_check(cid, hoid);
   if (r < 0)
     return r;
   r = object_map->clear(hoid, &spos);
@@ -4390,8 +4405,7 @@ int FileStore::_omap_setkeys(coll_t cid, const ghobject_t &hoid,
 			     const map<string, bufferlist> &aset,
 			     const SequencerPosition &spos) {
   dout(15) << __func__ << " " << cid << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(cid, hoid, &path);
+  int r = lfn_check(cid, hoid);
   if (r < 0)
     return r;
   return object_map->set_keys(hoid, aset, &spos);
@@ -4401,8 +4415,7 @@ int FileStore::_omap_rmkeys(coll_t cid, const ghobject_t &hoid,
 			    const set<string> &keys,
 			    const SequencerPosition &spos) {
   dout(15) << __func__ << " " << cid << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(cid, hoid, &path);
+  int r = lfn_check(cid, hoid);
   if (r < 0)
     return r;
   r = object_map->rm_keys(hoid, keys, &spos);
@@ -4433,8 +4446,7 @@ int FileStore::_omap_setheader(coll_t cid, const ghobject_t &hoid,
 			       const SequencerPosition &spos)
 {
   dout(15) << __func__ << " " << cid << "/" << hoid << dendl;
-  IndexedPath path;
-  int r = lfn_find(cid, hoid, &path);
+  int r = lfn_check(cid, hoid);
   if (r < 0)
     return r;
   return object_map->set_header(hoid, bl, &spos);
@@ -4481,8 +4493,11 @@ int FileStore::_split_collection(coll_t cid,
     if (!r)
       r = get_index(dest, &to);
 
-    if (!r)
+    if (!r) {
       r = from->split(rem, bits, to);
+      existing_cache.clear(cid);
+    }
+
 
     _close_replay_guard(cid, spos);
     _close_replay_guard(dest, spos);
@@ -4562,8 +4577,10 @@ int FileStore::_split_collection_create(coll_t cid,
   if (!r) 
     r = get_index(dest, &to);
 
-  if (!r) 
+  if (!r) {
     r = from->split(rem, bits, to);
+    existing_cache.clear(cid);
+  }
 
   _close_replay_guard(cid, spos);
   _close_replay_guard(dest, spos);

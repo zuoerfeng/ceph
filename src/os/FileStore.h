@@ -34,6 +34,7 @@ using namespace __gnu_cxx;
 
 #include "common/Timer.h"
 #include "common/WorkQueue.h"
+#include "common/simple_spin.h"
 
 #include "common/Mutex.h"
 #include "HashIndex.h"
@@ -167,6 +168,92 @@ private:
   FileStoreBackend *backend;
 
   deque<uint64_t> snaps;
+
+  // Cache object whether exists, and will be clear if split collection(move
+  // objecct). If non-exist, get status from "lfn_find".
+  //
+  // Only need to modify status when object remove happened.
+  class ObjectStatusCache {
+    struct Collection {
+      hash_map<ghobject_t, int> status;
+      simple_spinlock_t lock;
+
+      void set(const ghobject_t &oid, int i) {
+        simple_spin_lock(&lock);
+        status[oid] = i;
+        simple_spin_unlock(&lock);
+      }
+
+      int get(const ghobject_t &oid) {
+        simple_spin_lock(&lock);
+        hash_map<ghobject_t, int>::iterator o = status.find(oid);
+        if (o != status.end() && o->second) {
+          simple_spin_unlock(&lock);
+          return status[oid];
+        }
+
+        simple_spin_unlock(&lock);
+        return 0;
+      }
+
+      void clear() {
+        simple_spin_lock(&lock);
+        status.clear();
+        simple_spin_unlock(&lock);
+      }
+
+      Collection(): lock(SIMPLE_SPINLOCK_INITIALIZER) {}
+    };
+    typedef std::tr1::shared_ptr<Collection> CollectionRef;
+
+    simple_spinlock_t col_lock;
+    hash_map<coll_t, CollectionRef> coll_map;
+
+    CollectionRef get_collection(coll_t cid) {
+      simple_spin_lock(&col_lock);
+      hash_map<coll_t, CollectionRef>::iterator cp = coll_map.find(cid);
+      if (cp == coll_map.end()) {
+        coll_map[cid].reset(new Collection);
+        simple_spin_unlock(&col_lock);
+        return coll_map[cid];
+      }
+      simple_spin_unlock(&col_lock);
+      return cp->second;
+    }
+
+  public:
+    // NOTE: The lock only needs to protect the coll_map. The osd is
+    // already sequencing reads and writes
+
+    void set_nonexist(coll_t cid, const ghobject_t &oid) {
+      CollectionRef c = get_collection(cid);
+      c->set(oid, 0);
+    }
+
+    void set_exist(coll_t cid, const ghobject_t &oid) {
+      CollectionRef c = get_collection(cid);
+      c->set(oid, 1);
+    }
+
+    bool is_exist(coll_t cid, const ghobject_t &oid) {
+      CollectionRef c = get_collection(cid);
+      return c->get(oid);
+    }
+
+    void clear_all() {
+      for (hash_map<coll_t, CollectionRef>::iterator cp = coll_map.begin();
+           cp != coll_map.end(); cp++) {
+        cp->second->clear();
+      }
+    }
+
+    void clear(coll_t cid) {
+      CollectionRef c = get_collection(cid);
+      c->clear();
+    }
+
+    ObjectStatusCache():col_lock(SIMPLE_SPINLOCK_INITIALIZER) {}
+  } existing_cache;
 
   // Indexed Collections
   IndexManager index_manager;
@@ -350,6 +437,7 @@ private:
 
 public:
   int lfn_find(coll_t cid, const ghobject_t& oid, IndexedPath *path);
+  bool lfn_check(coll_t cid, const ghobject_t& oid);
   int lfn_truncate(coll_t cid, const ghobject_t& oid, off_t length);
   int lfn_stat(coll_t cid, const ghobject_t& oid, struct stat *buf);
   int lfn_open(

@@ -5,8 +5,13 @@ libmsg_la_SOURCES = \
 	msg/Messenger.cc \
 	msg/Pipe.cc \
 	msg/PipeConnection.cc \
+	msg/AsyncConnection.cc \
 	msg/SimpleMessenger.cc \
-	msg/msg_types.cc
+	msg/AsyncMessenger.cc \
+	msg/msg_types.cc \
+	msg/Event.cc \
+	msg/EventEpoll.cc \
+	msg/net_handler.cc
 
 noinst_HEADERS += \
 	msg/Accepter.h \
@@ -17,8 +22,13 @@ noinst_HEADERS += \
 	msg/Messenger.h \
 	msg/Pipe.h \
 	msg/PipeConnection.h \
+	msg/AsyncConnection.h \
 	msg/SimpleMessenger.h \
+	msg/AsyncMessenger.h \
 	msg/SimplePolicyMessenger.h \
-	msg/msg_types.h
+	msg/msg_types.h \
+	msg/Event.h \
+	msg/EventEpoll.h \
+	msg/net_handler.h
 
 noinst_LTLIBRARIES += libmsg.la

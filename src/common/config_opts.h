@@ -131,6 +131,7 @@ OPTION(ms_dump_on_send, OPT_BOOL, false)           // hexdump msg to log on send
 OPTION(ms_event_op_threads, OPT_INT, 2)
 OPTION(ms_event_thread_timeout, OPT_INT, 15)
 OPTION(ms_event_thread_suicide_timeout, OPT_INT, 180)
+OPTION(ms_use_event, OPT_BOOL, false)
 
 OPTION(inject_early_sigterm, OPT_BOOL, false)
 

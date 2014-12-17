@@ -21,7 +21,10 @@ libmsg_la_SOURCES += \
 	msg/async/AsyncMessenger.cc \
 	msg/async/Event.cc \
 	msg/async/net_handler.cc \
-	msg/async/EventSelect.cc
+	msg/async/EventSelect.cc \
+	msg/infiniband/InfRcMessenger.cc \
+	msg/infiniband/InfRcConnection.cc \
+	msg/infiniband/Infiniband.cc
 
 if LINUX
 libmsg_la_SOURCES += msg/async/EventEpoll.cc
@@ -47,7 +50,10 @@ noinst_HEADERS += \
 	msg/async/Event.h \
 	msg/async/EventEpoll.h \
 	msg/async/EventSelect.h \
-	msg/async/net_handler.h
+	msg/async/net_handler.h \
+	msg/infiniband/InfRcMessenger.h \
+	msg/infiniband/InfRcConnection.h \
+	msg/infiniband/Infiniband.h
 
 if LINUX
 libmsg_la_SOURCES += msg/async/EventEpoll.h

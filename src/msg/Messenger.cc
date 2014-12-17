@@ -9,6 +9,7 @@
 #ifdef HAVE_XIO
 #include "msg/xio/XioMessenger.h"
 #endif
+#include "msg/infiniband/InfRcMessenger.h"
 
 Messenger *Messenger::create(CephContext *cct, const string &type,
 			     entity_name_t name, string lname,
@@ -27,6 +28,8 @@ Messenger *Messenger::create(CephContext *cct, const string &type,
 	   cct->check_experimental_feature_enabled("ms-type-xio"))
     return new XioMessenger(cct, name, lname, nonce);
 #endif
+  else if (type == "infiniband")
+    return new InfRcMessenger(cct, name, lname, nonce);
   lderr(cct) << "unrecognized ms_type '" << type << "'" << dendl;
   return NULL;
 }

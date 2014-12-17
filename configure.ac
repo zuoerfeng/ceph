@@ -624,6 +624,22 @@ if test "x$enable_cephfs_java" = "xyes"; then
 fi
 AM_CONDITIONAL(HAVE_JUNIT4, [test "$have_junit4" = "1"])
 
+# OFED
+#
+AC_ARG_ENABLE(rdma,
+    [AC_HELP_STRING([--enable-xio], [build Ceph RDMA transport])],
+    [], [enable_rdma=yes])
+
+AM_CONDITIONAL(ENABLE_RDMA, [test "x$enable_rdma" = "xyes"])
+
+if test "x$enable_rdma" = x"yes"; then
+   AC_CHECK_LIB([ibverbs], [ibv_query_device], [], AC_MSG_FAILURE([OFED not found]))
+   AC_DEFINE([HAVE_XIO], [1], [RDMA conditional compilation])
+
+   RDMA_LIBS="-libverbs"
+   AC_SUBST(RDMA_LIBS)
+fi
+
 #
 # Accelio and OFED
 #

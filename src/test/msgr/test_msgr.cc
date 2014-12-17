@@ -1316,7 +1316,8 @@ INSTANTIATE_TEST_CASE_P(
   MessengerTest,
   ::testing::Values(
     "async",
-    "simple"
+    "simple",
+    "infiniband"
   )
 );
 

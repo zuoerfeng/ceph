@@ -281,10 +281,14 @@ void InfRcWorker::shutdown()
     client_send_queue.pop_front();
     p.first->put();
   }
+  client_send_queue.clear();
   for (ceph::unordered_map<uint64_t, Message*>::iterator it = outstanding_messages.begin();
        it != outstanding_messages.end(); ++it)
     it->second->put();
   outstanding_messages.clear();
+  for (ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.begin();
+       it != qp_conns.end(); ++it)
+    it->second.second->mark_down();
   qp_conns.clear();
   while (!dead_queue_pairs.empty()) {
     delete dead_queue_pairs.back();
@@ -309,7 +313,7 @@ InfRcConnectionRef InfRcWorker::create_connection(const entity_addr_t& dest, int
   InfRcConnectionRef conn = new InfRcConnection(cct, m, this, qp, dest, type);
   Mutex::Locker l(lock);
   assert(!qp_conns.count(qp->get_local_qp_number()));
-  qp_conns[qp->get_local_qp_number()] = conn;
+  qp_conns[qp->get_local_qp_number()] = make_pair(qp, conn);
   return conn;
 }
 
@@ -357,15 +361,15 @@ void InfRcWorker::process_request(bufferptr &bp, uint32_t qpnum)
   InfRcConnectionRef conn = NULL;
   {
     Mutex::Locker l(lock);
-    ceph::unordered_map<uint64_t, InfRcConnectionRef>::iterator it = qp_conns.find(qpnum);
+    ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.find(qpnum);
     if (it == qp_conns.end()) {
       // discard message
-      ldout(cct, 5) << __func__ << " missing qp_num " << qpnum << ", message "
-                                << *message << dendl;
+      ldout(cct, 0) << __func__ << " missing qp_num " << qpnum << ", discard message "
+                    << *message << dendl;
       message->put();
       return ;
     }
-    conn = it->second;
+    conn = it->second.second;
     message->set_connection(conn);
   }
 
@@ -513,9 +517,9 @@ void InfRcWorker::handle_tx_event()
       if (ret_array[i].status == IBV_WC_RETRY_EXC_ERR) {
         lderr(cct) << __func__ << " connection between server and client not working. Disconnect this now" << dendl;
       } else if (ret_array[i].status == IBV_WC_WR_FLUSH_ERR){
-        ceph::unordered_map<uint64_t, InfRcConnectionRef>::iterator qp_it = qp_conns.find(ret_array[i].qp_num);
+        ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator qp_it = qp_conns.find(ret_array[i].qp_num);
         if (qp_it != qp_conns.end()) {
-          lderr(cct) << __func__ << " this connection(" << qp_it->second
+          lderr(cct) << __func__ << " this connection(" << qp_it->second.second
                      << ") still inline in this side, mark down it" << dendl;
         } else {
           // Must be STOPPED
@@ -533,10 +537,7 @@ void InfRcWorker::handle_tx_event()
       }
       ldout(cct, 1) << __func__ << " discard message=" << it->second << " mark down associated connection="
                     << it->second->get_connection() << dendl;
-      lock.Unlock();
       it->second->get_connection()->mark_down();
-      // Note: It's safe to unlock and lock without check?
-      lock.Lock();
     }
 
     it->second->put();
@@ -598,19 +599,21 @@ void InfRcWorker::handle_async_event()
       ldout(cct, 10) << __func__ << " event associated qp=" << async_event.element.qp
                      << " evt: " << ibv_event_type_str(async_event.event_type) << dendl;
       lock.Lock();
-      ceph::unordered_map<uint64_t, InfRcConnectionRef>::iterator it;
+      ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it;
       it = qp_conns.find(async_event.element.qp->qp_num);
       if (it == qp_conns.end()) {
-        ldout(cct, 5) << __func__ << " missing qp_num=" << async_event.element.qp->qp_num
+        ldout(cct, 1) << __func__ << " missing qp_num=" << async_event.element.qp->qp_num
                                   << " discard event" << dendl;
         ibv_ack_async_event(&async_event);
         lock.Unlock();
         return ;
       }
-      InfRcConnectionRef conn = it->second;
-      ldout(cct, 10) << __func__ << " associated conn=" << conn << " stop this" << dendl;
+      it->second.second->mark_down();
+      dead_queue_pairs.push_back(it->second.first);
+      ldout(cct, 10) << __func__ << " associated conn=" << it->second.second
+                     << " stop this" << dendl;
+      qp_conns.erase(it);
       lock.Unlock();
-      conn->mark_down();
     } else {
       ldout(cct, 0) << __func__ << " ibv_get_async_event: dev=" << infiniband->device.ctxt
                     << " evt: " << ibv_event_type_str(async_event.event_type)

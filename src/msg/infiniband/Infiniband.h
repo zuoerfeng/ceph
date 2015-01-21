@@ -274,8 +274,8 @@ class Infiniband {
     }
     ibv_qp* get_qp() const { return qp; }
     int plumb(QueuePairTuple *qpt);
+    int to_dead();
     bool is_dead() { return dead; }
-    void set_dead() { dead = true; }
 
    private:
     Infiniband&  infiniband;     // Infiniband to which this QP belongs

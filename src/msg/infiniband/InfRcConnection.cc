@@ -269,13 +269,21 @@ void InfRcConnection::process()
             // plumb up our queue pair with the server's parameters.
             r = qp->plumb(&incoming_qpt);
             if (r == 0) {
+              cm_lock.Unlock();
               infrc_msgr->learned_addr(incoming_qpt.get_receiver_addr());
               if (infrc_msgr->accept_conn(this)) {
+                cm_lock.Lock();
                 ldout(infrc_msgr->cct, 1) << __func__ << " accept conn("
                                           << incoming_qpt.get_receiver_addr()
                                           << ") racing, mark me down" << dendl;
                 _stop();
                 break;
+              }
+              cm_lock.Lock();
+              if (state != STATE_CONNECTING) {
+                ldout(infrc_msgr->cct, 1) << __func__ << " conn is already down " << dendl;
+                assert(state == STATE_CLOSED);
+                goto fail;
               }
               center->delete_file_event(client_setup_socket, EVENT_READABLE);
               ::close(client_setup_socket);
@@ -368,13 +376,15 @@ void InfRcConnection::_stop()
 {
   ldout(infrc_msgr->cct, 10) << __func__ << " qp=" << qp << dendl;
   assert(cm_lock.is_locked());
-  if (state == STATE_CLOSED)
+  if (state == STATE_CLOSED) {
+    assert(!qp);
     return ;
+  }
 
   infrc_msgr->unregister_conn(this);
   state = STATE_CLOSED;
   if (qp) {
-    worker->ready_dead(qp);
+    qp->to_dead();
     qp = NULL;
   }
   while (!pending_send.empty()) {

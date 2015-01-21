@@ -495,6 +495,39 @@ int Infiniband::QueuePair::plumb(QueuePairTuple *qpt)
   return 0;
 }
 
+/**
+ * Change RC QueuePair into the ERROR state. This is necessary modify
+ * the Queue Pair into the Error state and poll all of the relevant
+ * Work Completions prior to destroying a Queue Pair.
+ * Since destroying a Queue Pair does not guarantee that its Work
+ * Completions are removed from the CQ upon destruction. Even if the
+ * Work Completions are already in the CQ, it might not be possible to
+ * retrieve them. If the Queue Pair is associated with an SRQ, it is
+ * recommended wait for the affiliated event IBV_EVENT_QP_LAST_WQE_REACHED
+ *
+ * \return
+ *      -1 if the QueuePair can't switch to ERROR
+ *      0 for success.
+ */
+int Infiniband::QueuePair::to_dead()
+{
+  assert(!dead);
+  dead = true;
+
+  ibv_qp_attr qpa;
+  memset(&qpa, 0, sizeof(qpa));
+  qpa.qp_state = IBV_QPS_ERR;
+
+  int mask = IBV_QP_STATE;
+  int ret = ibv_modify_qp(qp, &qpa, mask);
+  if (ret) {
+    lderr(infiniband.cct) << __func__ << " failed to transition to ERROR state: "
+                           << cpp_strerror(errno) << dendl;
+    return -1;
+  }
+  return ret;
+}
+
 //-------------------------------------
 // Infiniband::CompletionChannel class
 //-------------------------------------

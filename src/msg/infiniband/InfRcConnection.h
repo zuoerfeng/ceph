@@ -113,7 +113,6 @@ class InfRcConnection : public Connection {
     remote_reset_handler.reset();
     local_deliver_handler.reset();
   }
-
 };
 
 typedef boost::intrusive_ptr<InfRcConnection> InfRcConnectionRef;

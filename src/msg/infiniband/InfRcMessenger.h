@@ -203,7 +203,19 @@ class InfRcWorker : public Thread {
   ceph::unordered_map<uint64_t, Message*> outstanding_messages;
 
   // qp_num -> InfRcConnection
-  ceph::unordered_map<uint64_t, InfRcConnectionRef> qp_conns;
+  // The main usage of `qp_conns` is looking up connection by qp_num,
+  // so the lifecycle of element in `qp_conns` is the lifecycle of qp.
+  //// make qp queue into dead state
+  /**
+   * 1. Connection call mark_down
+   * 2. Move the Queue Pair into the Error state(QueuePair::to_dead)
+   * 3. Wait for the affiliated event IBV_EVENT_QP_LAST_WQE_REACHED(handle_async_event)
+   * 4. Wait for CQ to be empty(handle_tx_event)
+   * 5. Destroy the QP by calling ibv_destroy_qp()(handle_tx_event)
+   *
+   * @param qp The qp needed to dead
+   */
+  ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> > qp_conns;
   /// if a queue pair is closed when transmit buffers are active
   /// on it, the transmit buffers never get returned via tx_cq.  To
   /// work around this problem, don't delete queue pairs immediately. Instead,
@@ -240,12 +252,6 @@ class InfRcWorker : public Thread {
    */
   InfRcConnectionRef create_connection(const entity_addr_t &dest, int type, InfRcMessenger *m);
   int submit_message(Message *m, QueuePair *qp);
-  void ready_dead(QueuePair *qp) {
-    Mutex::Locker l(lock);
-    qp_conns.erase(qp->get_local_qp_number());
-    dead_queue_pairs.push_back(qp);
-    qp->set_dead();
-  }
   void send_pending_messages(bool locked);
   void handle_rx_event();
   void handle_tx_event();

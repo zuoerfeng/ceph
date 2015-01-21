@@ -36,13 +36,13 @@ class Infiniband {
   // back and forth.
   class QueuePairTuple {
    public:
-    QueuePairTuple() : qpn(0), psn(0), lid(0), nonce(0) {
-      assert(sizeof(QueuePairTuple) == 19+2*sizeof(entity_addr_t));
+    QueuePairTuple() : qpn(0), psn(0), lid(0), nonce(0), features(0), tag(0), type(0) {
+      assert(sizeof(QueuePairTuple) == 28+2*sizeof(ceph_entity_addr));
     }
     QueuePairTuple(uint16_t lid, uint32_t qpn, uint32_t psn,
-                   uint64_t nonce, __u8 t, const entity_addr_t &s,
+                   uint64_t nonce, uint64_t f, __u8 tag, __u8 t, const entity_addr_t &s,
                    const entity_addr_t &r)
-      : qpn(qpn), psn(psn), lid(lid), nonce(nonce), type(t) {
+      : qpn(qpn), psn(psn), lid(lid), nonce(nonce), features(f), tag(tag), type(t) {
       set_sender_addr(s);
       set_recevier_addr(r);
     }
@@ -51,6 +51,10 @@ class Infiniband {
     uint32_t get_psn() const { return psn; }
     uint64_t get_nonce() const { return nonce; }
     __u8     get_type() const { return type; }
+    __u8     get_tag() const { return tag; }
+    void     set_tag(uint8_t t) { tag = t; }
+    __le64   get_features() const { return features; }
+    void     set_features(uint64_t f) { features = f; }
     const entity_addr_t get_sender_addr() const { return entity_addr_t(addr); }
     const entity_addr_t get_receiver_addr() const { return entity_addr_t(peer_addr); }
     void set_sender_addr(const entity_addr_t &r) {
@@ -65,6 +69,8 @@ class Infiniband {
     uint32_t psn;            // initial packet sequence number
     uint16_t lid;            // infiniband address: "local id"
     uint64_t nonce;          // random nonce used to confirm replies are
+    __le64   features;
+    __u8     tag;
     __u8     type;
     // for received requests
     ceph_entity_addr addr;      // address for the sender

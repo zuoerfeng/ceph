@@ -937,7 +937,7 @@ int InfRcWorkerPool::post_tx_buffer(InfRcWorker *worker, BufferDescriptor *bd)
     InfRcWorker *w = pending_sent_workers.front();
     if (worker != w) {
       w->center.dispatch_event_external(
-          EventCallbackRef(new C_infrc_send_message(worker)));
+          EventCallbackRef(new C_infrc_send_message(w)));
       w->center.wakeup();
       ldout(cct, 10) << __func__ << " wakeup pending sent worker=" << w << dendl;
     }
@@ -1345,7 +1345,7 @@ void InfRcMessenger::recv_connect()
   while (1) {
     entity_addr_t socket_addr;
     socklen_t slen = sizeof(socket_addr.ss_addr());
-    Infiniband::QueuePairTuple incoming_qpt;
+    Infiniband::QueuePairTuple incoming_qpt, outgoing_qpt;
     ssize_t len = ::recvfrom(server_setup_socket, &incoming_qpt,
                              sizeof(incoming_qpt), 0,
                              reinterpret_cast<sockaddr *>(&socket_addr.ss_addr()), &slen);
@@ -1368,6 +1368,22 @@ void InfRcMessenger::recv_connect()
       peer_addr.set_port(port);
       incoming_qpt.set_sender_addr(peer_addr);
       ldout(cct, 10) << __func__ << " accept peer addr is really " << peer_addr << dendl;
+    }
+    incoming_qpt.set_features(ceph_sanitize_features(incoming_qpt.get_features()));
+    uint64_t required = get_policy(incoming_qpt.get_type()).features_required;
+    uint64_t feat_missing = required & ~(uint64_t)incoming_qpt.get_features();
+    if (feat_missing) {
+      outgoing_qpt.set_tag(CEPH_MSGR_TAG_FEATURES);
+      outgoing_qpt.set_features(required);
+      ldout(cct, 1) << __func__ << " peer missing required features "
+                                << std::hex << feat_missing << std::dec << dendl;
+      len = ::sendto(server_setup_socket, &outgoing_qpt, sizeof(outgoing_qpt), 0,
+                     reinterpret_cast<sockaddr *>(&socket_addr.ss_addr()), slen);
+      if (len != sizeof(outgoing_qpt)) {
+        lderr(cct) << __func__ << " sendto failed, len = " << len << ": "
+                   << cpp_strerror(errno) << dendl;
+      }
+      continue;
     }
 
     Mutex::Locker l(lock);
@@ -1400,7 +1416,7 @@ void InfRcMessenger::recv_connect()
 
     // now send the client back our queue pair information so they can
     // complete the initialisation.
-    Infiniband::QueuePairTuple outgoing_qpt = conn->build_qp_tuple(incoming_qpt.get_nonce());
+    outgoing_qpt = conn->build_qp_tuple(incoming_qpt.get_nonce());
     ldout(cct, 20) << __func__ << " sending qpt=" << outgoing_qpt << dendl;
     len = ::sendto(server_setup_socket, &outgoing_qpt,
                    sizeof(outgoing_qpt), 0,

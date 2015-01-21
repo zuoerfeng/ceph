@@ -199,11 +199,11 @@ void InfRcConnection::process()
           r = get_random_bytes((char*)&nonce, sizeof(nonce));
           if (r)
             nonce += 1000000;
-          Infiniband::QueuePairTuple outgoing_qpt(static_cast<uint16_t>(worker->get_lid()),
-                                                  qp->get_local_qp_number(),
-                                                  qp->get_initial_psn(), nonce, infrc_msgr->get_myinst().name.type(),
-                                                  infrc_msgr->get_myaddr(),
-                                                  get_peer_addr());
+          Infiniband::QueuePairTuple outgoing_qpt(
+              static_cast<uint16_t>(worker->get_lid()),
+              qp->get_local_qp_number(), qp->get_initial_psn(), nonce,
+              policy.features_supported, 0, infrc_msgr->get_myinst().name.type(),
+              infrc_msgr->get_myaddr(), get_peer_addr());
           ldout(infrc_msgr->cct, 20) << __func__ << " sending qpt=" << outgoing_qpt << dendl;
           r = ::send(client_setup_socket, &outgoing_qpt, sizeof(outgoing_qpt), 0);
           if (r != sizeof(outgoing_qpt)) {
@@ -248,6 +248,21 @@ void InfRcConnection::process()
                                  << ") while sending to ip: [" << inet_ntoa(sin.sin_addr)
                                  << "] port: [" << htons(sin.sin_port) << "]" << dendl;
         } else {
+          if (CEPH_MSGR_TAG_READY != incoming_qpt.get_tag()) {
+            if (CEPH_MSGR_TAG_FEATURES == incoming_qpt.get_tag()) {
+
+              ldout(infrc_msgr->cct, 0) << __func__ << " connect protocol feature mismatch, my "
+                                        << std::hex << policy.features_supported << " < peer "
+                                        << incoming_qpt.get_features() << " missing "
+                                        << (incoming_qpt.get_features() & ~policy.features_supported)
+                                        << std::dec << dendl;
+            } else {
+              ldout(infrc_msgr->cct, 0) << __func__ << " unknown tag=" << incoming_qpt.get_tag()
+                                        << ". This is bug!" << dendl;
+              assert(0);
+            }
+            goto fail;
+          }
           ldout(infrc_msgr->cct, 20) << __func__ << " state=" << get_state_name(state)
                                      << " receiving qpt=" << incoming_qpt << dendl;
           if (nonce == incoming_qpt.get_nonce()) {
@@ -480,6 +495,8 @@ void InfRcConnection::local_deliver()
 Infiniband::QueuePairTuple InfRcConnection::build_qp_tuple(uint64_t nonce) 
 {
   Infiniband::QueuePairTuple t(worker->get_lid(), qp->get_local_qp_number(), qp->get_initial_psn(),
-                               nonce, infrc_msgr->get_myinst().name.type(), infrc_msgr->get_myaddr(), get_peer_addr());
+                               nonce, policy.features_supported, CEPH_MSGR_TAG_READY,
+                               infrc_msgr->get_myinst().name.type(),
+                               infrc_msgr->get_myaddr(), get_peer_addr());
   return t;
 }

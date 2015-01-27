@@ -132,6 +132,11 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
   void barrier();
   void shutdown();
   BufferDescriptor* reserve_message_buffer(InfRcWorker *w);
+  int post_srq_receive(const char *buf) {
+    BufferDescriptor *bd = rx_buffers->get_descriptor(buf);
+    assert(bd);
+    return post_srq_receive(bd);
+  }
   int post_srq_receive(BufferDescriptor *bd);
   int post_tx_buffer(InfRcWorker *w, BufferDescriptor *bd);
   uint32_t incr_used_srq_buffers() {

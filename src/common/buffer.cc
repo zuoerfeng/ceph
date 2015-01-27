@@ -532,6 +532,18 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
     }
   };
 
+  class buffer::raw_free_hook : public buffer::raw {
+    FreeHook *hook;
+    void *ctxt;
+   public:
+    raw_free_hook(const char *buf, unsigned len, FreeHook *h, void *c):
+        raw((char*)buf, len), hook(h), ctxt(c) { }
+    ~raw_free_hook() { hook(data, ctxt); }
+    raw* clone_empty() {
+      return new buffer::raw_char(len);
+    }
+  };
+
 #if defined(HAVE_XIO)
   class buffer::xio_msg_buffer : public buffer::raw {
   private:
@@ -604,6 +616,9 @@ static simple_spinlock_t buffer_debug_lock = SIMPLE_SPINLOCK_INITIALIZER;
   }
   buffer::raw* buffer::create_static(unsigned len, char *buf) {
     return new raw_static(buf, len);
+  }
+  buffer::raw* buffer::create_free_hook(unsigned len, const char *buf, FreeHook *h, void *c) {
+    return new raw_free_hook(buf, len, h, c);
   }
   buffer::raw* buffer::create_aligned(unsigned len, unsigned align) {
 #ifndef __CYGWIN__

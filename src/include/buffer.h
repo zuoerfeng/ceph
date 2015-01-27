@@ -132,6 +132,7 @@ private:
   class raw;
   class raw_malloc;
   class raw_static;
+  class raw_free_hook;
   class raw_mmap_pages;
   class raw_posix_aligned;
   class raw_hack_aligned;
@@ -158,6 +159,8 @@ public:
   static raw* create_page_aligned(unsigned len);
   static raw* create_zero_copy(unsigned len, int fd, int64_t *offset);
   static raw* create_unshareable(unsigned len);
+  typedef void FreeHook(const char *b, void *ctxt);
+  static raw* create_free_hook(unsigned len, const char *buf, FreeHook *hook, void *ctxt);
 
 #if defined(HAVE_XIO)
   static raw* create_msg(unsigned len, char *buf, XioDispatchHook *m_hook);

@@ -416,11 +416,11 @@ class Infiniband {
      * \return
      *      The BufferDescriptor for the buffer which #buffer points into.
      */
-    BufferDescriptor& get_descriptor(const void* buffer) {
+    BufferDescriptor* get_descriptor(const void* buffer) {
       size_t descriptorIndex = (static_cast<const char*>(buffer) -
           static_cast<char*>(base_pointer)) /
         buffer_size;
-      return descriptors[descriptorIndex];
+      return &descriptors[descriptorIndex];
     }
 
     /**

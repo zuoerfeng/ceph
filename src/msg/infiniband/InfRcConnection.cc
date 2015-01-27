@@ -233,7 +233,6 @@ void InfRcConnection::process()
 
       case STATE_CONNECTING:
       {
-        sockaddr_in sin;
         Infiniband::QueuePairTuple incoming_qpt;
         ssize_t len = ::recv(client_setup_socket, &incoming_qpt,
                              sizeof(incoming_qpt), 0);
@@ -245,8 +244,7 @@ void InfRcConnection::process()
                                  << cpp_strerror(errno) << dendl;
         } else if (len != sizeof(incoming_qpt)) {
           lderr(infrc_msgr->cct) << __func__ << " recvfrom returned bad length (" << len
-                                 << ") while sending to ip: [" << inet_ntoa(sin.sin_addr)
-                                 << "] port: [" << htons(sin.sin_port) << "]" << dendl;
+                                 << ") while sending to: " << get_peer_addr() << dendl;
         } else {
           if (CEPH_MSGR_TAG_READY != incoming_qpt.get_tag()) {
             if (CEPH_MSGR_TAG_FEATURES == incoming_qpt.get_tag()) {
@@ -349,7 +347,7 @@ int InfRcConnection::send_message(Message *m)
                                << features << " " << m << " " << *m << dendl;
 
   // encode and copy out of *m
-  m->encode(features, !infrc_msgr->cct->_conf->ms_nocrc);
+  m->encode(features, 0);
   cm_lock.Lock();
   if (state == STATE_OPEN && pending_send.empty()) {
     worker->submit_message(m, qp);

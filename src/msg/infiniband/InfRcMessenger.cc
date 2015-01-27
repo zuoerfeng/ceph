@@ -99,6 +99,12 @@ static ostream& _prefix(std::ostream *_dout, InfRcWorkerPool *p) {
  */
 
 
+void infrc_buffer_post_buffer(const char *buf, void *ctxt)
+{
+  InfRcWorkerPool *pool = static_cast<InfRcWorkerPool*>(ctxt);
+  pool->post_srq_receive(buf);
+}
+
 class C_infrc_handle_accept : public EventCallback {
   InfRcMessenger *msgr;
 
@@ -335,7 +341,7 @@ void InfRcWorker::process_request(bufferptr &bp, uint32_t qpnum)
   middle.append(bp, offset, header.middle_len);
   offset += header.middle_len;
   data.append(bp, offset, header.data_len);
-  Message *message = decode_message(cct, header, footer, front, middle, data);
+  Message *message = decode_message(cct, 0, header, footer, front, middle, data);
   if (!message) {
     ldout(cct, 1) << __func__ << " decode message failed, dropped" << dendl;
     return ;
@@ -457,7 +463,9 @@ void InfRcWorker::handle_rx_event()
       pool->post_srq_receive(bd);
     } else {
       // message will hold one of srq's buffers until message is destroyed
-      bp = bufferptr(buffer::create_static(response->byte_len, bd->buffer));
+      bp = bufferptr(
+          buffer::create_free_hook(response->byte_len, bd->buffer,
+                                   infrc_buffer_post_buffer, pool));
     }
     process_request(bp, response->qp_num);
     ldout(cct, 20) << __func__ << " Received message from " << response->src_qp

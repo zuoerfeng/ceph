@@ -980,6 +980,11 @@ ceph_perf_objectstore_LDADD = $(LIBOS) $(UNITTEST_LDADD) $(CEPH_GLOBAL)
 ceph_perf_objectstore_CXXFLAGS = $(UNITTEST_CXXFLAGS)
 bin_DEBUGPROGRAMS += ceph_perf_objectstore
 
+ceph_perf_filejournal_SOURCES = test/objectstore/FileJournalBenchmark.cc
+ceph_perf_filejournal_LDADD = $(LIBOS) $(UNITTEST_LDADD) $(CEPH_GLOBAL)
+ceph_perf_filejournal_CXXFLAGS = $(UNITTEST_CXXFLAGS)
+bin_DEBUGPROGRAMS += ceph_perf_filejournal
+
 if LINUX
 ceph_test_objectstore_SOURCES = test/objectstore/store_test.cc
 ceph_test_objectstore_LDADD = $(LIBOS) $(UNITTEST_LDADD) $(CEPH_GLOBAL)

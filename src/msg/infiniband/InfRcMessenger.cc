@@ -135,17 +135,6 @@ class C_handle_cq_tx : public EventCallback {
   }
 };
 
-class C_infrc_handle_dispatch : public EventCallback {
-  InfRcMessenger *msgr;
-  Message *m;
-
- public:
-  C_infrc_handle_dispatch(InfRcMessenger *msgr, Message *m): msgr(msgr), m(m) {}
-  void do_request(int id) {
-    msgr->ms_deliver_dispatch(m);
-  }
-};
-
 class C_infrc_async_ev_handler : public EventCallback {
   InfRcWorker *worker;
 
@@ -172,7 +161,7 @@ class C_infrc_send_message : public EventCallback {
 InfRcWorker::InfRcWorker(CephContext *c, InfRcWorkerPool *p, int i)
   : cct(c), pool(p), done(false), id(i), infiniband(p->infiniband),
     rx_cq(NULL), tx_cq(NULL), rxcq_events_need_ack(0), txcq_events_need_ack(0),
-    rx_cc(NULL), tx_cc(NULL), nonce(0), lock("InfRcWorker::lock"),
+    rx_cc(NULL), tx_cc(NULL), lock("InfRcWorker::lock"),
     center(c)
 {
   center.init(5000);
@@ -350,20 +339,6 @@ void InfRcWorker::process_request(bufferptr &bp, uint32_t qpnum)
   message->set_recv_stamp(now);
   message->set_throttle_stamp(now);
   message->set_recv_complete_stamp(now);
-  // check received seq#.  if it is old, drop the message.  
-  // note that incoming messages may skip ahead.  this is convenient for the client
-  // side queueing because messages can't be renumbered, but the (kernel) client will
-  // occasionally pull a message out of the sent queue to send elsewhere.  in that case
-  // it doesn't matter if we "got" it or not.
-  //if (message->get_seq() <= in_seq) {
-  //  ldout(cct,0) << __func__ << " got old message "
-  //          << message->get_seq() << " <= " << in_seq << " " << message << " " << *message
-  //          << ", discarding" << dendl;
-  //  message->put();
-  //  if (has_feature(CEPH_FEATURE_RECONNECT_SEQ) && cct->_conf->ms_die_on_old_message)
-  //    assert(0 == "old msgs despite reconnect_seq feature");
-  //}
-
   InfRcConnectionRef conn = NULL;
   {
     Mutex::Locker l(lock);
@@ -379,17 +354,7 @@ void InfRcWorker::process_request(bufferptr &bp, uint32_t qpnum)
     message->set_connection(conn);
   }
 
-  //TODO last received message.
-  //in_seq = message->get_seq();
-  ldout(cct, 10) << __func__ << " got message=" << message << " seq=" << message->get_seq()
-                             << " qpn=" << qpnum << " " << *message << dendl;
-
-  conn->infrc_msgr->ms_fast_preprocess(message);
-  if (conn->infrc_msgr->ms_can_fast_dispatch(message)) {
-    conn->infrc_msgr->ms_fast_dispatch(message);
-  } else {
-    center.dispatch_event_external(EventCallbackRef(new C_infrc_handle_dispatch(conn->infrc_msgr, message)));
-  }
+  conn->process_request(message);
 }
 
 void InfRcWorker::send_pending_messages(bool locked)
@@ -675,7 +640,6 @@ int InfRcWorker::send_zero_copy(Message *m, QueuePair *qp, BufferDescriptor *bd)
   assert(lock.is_locked());
   bufferlist bl;
 
-  m->set_seq(nonce.inc());
   // prepare everything
   ceph_msg_header& header = m->get_header();
   ceph_msg_footer& footer = m->get_footer();

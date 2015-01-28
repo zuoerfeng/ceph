@@ -113,12 +113,23 @@ class C_infrc_clean_handler : public EventCallback {
   }
 };
 
+class C_infrc_handle_dispatch : public EventCallback {
+  InfRcMessenger *msgr;
+  Message *m;
+
+ public:
+  C_infrc_handle_dispatch(InfRcMessenger *msgr, Message *m): msgr(msgr), m(m) {}
+  void do_request(int id) {
+    msgr->ms_deliver_dispatch(m);
+  }
+};
+
 
 InfRcConnection::InfRcConnection(CephContext *c, InfRcMessenger *m, InfRcWorker *w,
                                  Infiniband::QueuePair *qp, const entity_addr_t& addr, int type)
   : Connection(c, m), qp(qp), worker(w), center(&w->center),
-    cm_lock("InfRcConnection::cm_lock"), nonce(0), state(STATE_NEW), client_setup_socket(-1),
-    exchange_count(0), infrc_msgr(m)
+    cm_lock("InfRcConnection::cm_lock"), nonce(0), out_seq(0), in_seq(0), state(STATE_NEW),
+    client_setup_socket(-1), exchange_count(0), infrc_msgr(m)
 {
   set_peer_type(type);
   set_peer_addr(addr);
@@ -349,6 +360,7 @@ int InfRcConnection::send_message(Message *m)
   // encode and copy out of *m
   m->encode(features, 0);
   cm_lock.Lock();
+  m->set_seq(++out_seq);
   if (state == STATE_OPEN && pending_send.empty()) {
     worker->submit_message(m, qp);
   } else if (state == STATE_CLOSED) {
@@ -507,4 +519,40 @@ Infiniband::QueuePairTuple InfRcConnection::build_qp_tuple(uint64_t nonce)
                                infrc_msgr->get_myinst().name.type(),
                                infrc_msgr->get_myaddr(), get_peer_addr());
   return t;
+}
+
+void InfRcConnection::process_request(Message *message)
+{
+  cm_lock.Lock();
+  if (message->get_seq() <= in_seq) {
+    ldout(infrc_msgr->cct, 0) << __func__ << " got old message " << message->get_seq()
+                  << " <= " << in_seq << " " << message << " " << *message
+                  << ", discarding" << dendl;
+    message->put();
+    if (has_feature(CEPH_FEATURE_RECONNECT_SEQ) && infrc_msgr->cct->_conf->ms_die_on_old_message)
+      assert(0 == "old msgs despite reconnect_seq feature");
+    return ;
+  }
+  if (message->get_seq() > in_seq + 1) {
+    ldout(infrc_msgr->cct, 0) << __func__ << " missed message?  skipped from seq "
+                              << in_seq << " to " << message->get_seq() << dendl;
+    if (infrc_msgr->cct->_conf->ms_die_on_skipped_message)
+      assert(0 == "skipped incoming seq");
+  }
+
+  in_seq = message->get_seq();
+
+  ldout(infrc_msgr->cct, 10) << __func__ << " got message=" << message << " seq=" << in_seq
+                             << " qpn=" << qp->get_local_qp_number() << " " << *message << dendl;
+
+  infrc_msgr->ms_fast_preprocess(message);
+  if (infrc_msgr->ms_can_fast_dispatch(message)) {
+    cm_lock.Unlock();
+    infrc_msgr->ms_fast_dispatch(message);
+    cm_lock.Lock();
+  } else {
+    center->dispatch_event_external(
+        EventCallbackRef(new C_infrc_handle_dispatch(infrc_msgr, message)));
+  }
+  cm_lock.Unlock();
 }

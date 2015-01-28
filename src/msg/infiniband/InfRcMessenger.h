@@ -190,7 +190,6 @@ class InfRcWorker : public Thread {
   CompletionChannel* rx_cc;         // completion channel for incoming requests
   CompletionChannel* tx_cc;         // completion channel for all transmits
                                     // -1 means we're not a server
-  atomic_t nonce;         // Used as uniq_id of message
     /// true, specifying we haven't learned our addr; set false when we find it.
   // maybe this should be protected by the lock?
 

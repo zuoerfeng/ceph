@@ -34,6 +34,7 @@ class InfRcConnection : public Connection {
   Mutex cm_lock;
   utime_t backoff;         // backoff time
   uint64_t nonce;
+  uint64_t out_seq, in_seq;
   int state;
   Messenger::Policy policy;
   int client_setup_socket; // UDP socket for outgoing setup requests
@@ -113,6 +114,7 @@ class InfRcConnection : public Connection {
     remote_reset_handler.reset();
     local_deliver_handler.reset();
   }
+  void process_request(Message *m);
 };
 
 typedef boost::intrusive_ptr<InfRcConnection> InfRcConnectionRef;

@@ -128,8 +128,8 @@ class C_infrc_handle_dispatch : public EventCallback {
 InfRcConnection::InfRcConnection(CephContext *c, InfRcMessenger *m, InfRcWorker *w,
                                  Infiniband::QueuePair *qp, const entity_addr_t& addr, int type)
   : Connection(c, m), qp(qp), worker(w), center(&w->center),
-    cm_lock("InfRcConnection::cm_lock"), nonce(0), out_seq(0), in_seq(0), state(STATE_NEW),
-    client_setup_socket(-1), exchange_count(0), infrc_msgr(m)
+    cm_lock("InfRcConnection::cm_lock"), nonce(0), in_seq(0), state(STATE_NEW),
+    client_setup_socket(-1), exchange_count(0), infrc_msgr(m), out_seq(0)
 {
   set_peer_type(type);
   set_peer_addr(addr);
@@ -206,7 +206,7 @@ void InfRcConnection::process()
           goto fail;
         }
 
-        if (exchange_count++ < QP_EXCHANGE_MAX_TIMEOUTS) {
+        if (exchange_count++ <= infrc_msgr->cct->_conf->ms_infiniband_exchange_max_timeouts) {
           r = get_random_bytes((char*)&nonce, sizeof(nonce));
           if (r)
             nonce += 1000000;
@@ -215,8 +215,18 @@ void InfRcConnection::process()
               qp->get_local_qp_number(), qp->get_initial_psn(), nonce,
               policy.features_supported, 0, infrc_msgr->get_myinst().name.type(),
               infrc_msgr->get_myaddr(), get_peer_addr());
+
+          // Send wrong qpt
+          if (infrc_msgr->cct->_conf->ms_inject_socket_failures && client_setup_socket >= 0) {
+            if (rand() % infrc_msgr->cct->_conf->ms_inject_socket_failures == 0) {
+              ldout(infrc_msgr->cct, 0) << __func__ << " injecting socket failure" << dendl;
+              memset(&outgoing_qpt, sizeof(outgoing_qpt), 1);
+            }
+          }
+
           ldout(infrc_msgr->cct, 20) << __func__ << " sending qpt=" << outgoing_qpt << dendl;
           r = ::send(client_setup_socket, &outgoing_qpt, sizeof(outgoing_qpt), 0);
+          uint64_t timeout = 0;
           if (r != sizeof(outgoing_qpt)) {
             if (r < 0) {
               if (errno != EINTR && errno != EAGAIN) {
@@ -229,14 +239,18 @@ void InfRcConnection::process()
             }
           } else {
             // Successfully sent
-            // FIXME: maybe timeout
             state = STATE_CONNECTING;
+            last_connect = ceph_clock_now(infrc_msgr->cct);
             center->create_file_event(client_setup_socket, EVENT_READABLE, read_handler);
+            timeout = infrc_msgr->cct->_conf->ms_infiniband_exchange_timeout_ms;
           }
+          register_time_events.insert(center->create_time_event(
+                  timeout, EventCallbackRef(new C_infrc_wakeup(this))));
         } else {
           lderr(infrc_msgr->cct) << __func__ << " failed to exchange with server ("
                                  << get_peer_addr().addr << ") within sent request "
-                                 << QP_EXCHANGE_MAX_TIMEOUTS << " times" << dendl;
+                                 << infrc_msgr->cct->_conf->ms_infiniband_exchange_max_timeouts
+                                 << " times" << dendl;
           goto fail;
         }
         break;
@@ -247,12 +261,33 @@ void InfRcConnection::process()
         Infiniband::QueuePairTuple incoming_qpt;
         ssize_t len = ::recv(client_setup_socket, &incoming_qpt,
                              sizeof(incoming_qpt), 0);
+        // Drop incoming qpt
+        if (infrc_msgr->cct->_conf->ms_inject_socket_failures && client_setup_socket >= 0) {
+          if (rand() % infrc_msgr->cct->_conf->ms_inject_socket_failures == 0) {
+            ldout(infrc_msgr->cct, 0) << __func__ << " injecting socket failure" << dendl;
+            len = -1;
+          }
+        }
         if (len == -1) {
           if (errno == EINTR || errno == EAGAIN) {
-            break;
+            if (last_connect) {
+              utime_t diff = ceph_clock_now(infrc_msgr->cct) - last_connect;
+              if (diff >= infrc_msgr->cct->_conf->ms_infiniband_exchange_timeout_ms) {
+                ldout(infrc_msgr->cct, 1) << __func__ << " timeout since last connect=" << last_connect
+                                          << " retry connect" << dendl;
+              } else {
+                // avoid time precious problem and leak retry event
+                register_time_events.insert(center->create_time_event(
+                        diff.to_nsec()/1000, EventCallbackRef(new C_infrc_wakeup(this))));
+                ldout(infrc_msgr->cct, 20) << __func__ << " still has " << diff.to_msec() << "ms"
+                                           << " recreate time event" << dendl;
+                break;
+              }
+            }
+          } else {
+            lderr(infrc_msgr->cct) << __func__ << " recv returned error " << errno << ": "
+                                   << cpp_strerror(errno) << dendl;
           }
-          lderr(infrc_msgr->cct) << __func__ << " recv returned error " << errno << ": "
-                                 << cpp_strerror(errno) << dendl;
         } else if (len != sizeof(incoming_qpt)) {
           lderr(infrc_msgr->cct) << __func__ << " recvfrom returned bad length (" << len
                                  << ") while sending to: " << get_peer_addr() << dendl;
@@ -280,6 +315,12 @@ void InfRcConnection::process()
             if (r == 0) {
               cm_lock.Unlock();
               infrc_msgr->learned_addr(incoming_qpt.get_receiver_addr());
+              if (infrc_msgr->cct->_conf->ms_inject_internal_delays) {
+                ldout(infrc_msgr->cct, 10) << __func__ << " sleep for " << infrc_msgr->cct->_conf->ms_inject_internal_delays << dendl;
+                utime_t t;
+                t.set_from_double(infrc_msgr->cct->_conf->ms_inject_internal_delays);
+                t.sleep();
+              }
               if (infrc_msgr->accept_conn(this)) {
                 cm_lock.Lock();
                 ldout(infrc_msgr->cct, 1) << __func__ << " accept conn("
@@ -300,7 +341,7 @@ void InfRcConnection::process()
               center->dispatch_event_external(
                   EventCallbackRef(new C_infrc_deliver_connect(infrc_msgr, this)));
               infrc_msgr->ms_deliver_handle_fast_connect(this);
-              state = STATE_OPEN;
+              state = STATE_CONNECTING_READY;
               exchange_count = 0;
               break;
             }
@@ -314,16 +355,36 @@ void InfRcConnection::process()
         break;
       }
 
+      case STATE_CONNECTING_READY:
+      {
+        // No other caller can directly send message because of current state
+        int r = 0;
+        while (!pending_send.empty()) {
+          Message *m = pending_send.front();
+          ldout(infrc_msgr->cct, 10) << __func__ << " submit pending message " << *m << dendl;
+          cm_lock.Unlock();
+          r = worker->submit_message(m, this);
+          cm_lock.Lock();
+          if (r < 0)
+            goto fail;
+          if (state != STATE_CONNECTING_READY) {
+            assert(state == STATE_CLOSED);
+            break;
+          }
+          pending_send.pop_front();
+        }
+        if (state == STATE_CONNECTING_READY) {
+          assert(pending_send.empty());
+          state = STATE_OPEN;
+        }
+        break;
+      }
+
       case STATE_OPEN:
       {
         ldout(infrc_msgr->cct, 10) << __func__ << " ready to send/redeive to "
                                    << get_peer_addr() << dendl;
-        while (!pending_send.empty()) {
-          Message *m = pending_send.front();
-          pending_send.pop_front();
-          ldout(infrc_msgr->cct, 10) << __func__ << " submit pending message " << *m << dendl;
-          worker->submit_message(m, qp);
-        }
+        assert(pending_send.empty());
         break;
       }
 
@@ -337,7 +398,7 @@ void InfRcConnection::process()
     continue;
 
 fail:
-    fault();
+    _fault();
   } while (prev_state != state);
 }
 
@@ -360,9 +421,14 @@ int InfRcConnection::send_message(Message *m)
   // encode and copy out of *m
   m->encode(features, 0);
   cm_lock.Lock();
-  m->set_seq(++out_seq);
+
   if (state == STATE_OPEN && pending_send.empty()) {
-    worker->submit_message(m, qp);
+    cm_lock.Unlock();
+    if (worker->submit_message(m, this)) {
+      list<Message *> messages;
+      messages.push_back(m);
+      fault(&messages);
+    }
   } else if (state == STATE_CLOSED) {
     ldout(infrc_msgr->cct, 1) << __func__ << " connection already stopped: " << *m << dendl;
     m->put();
@@ -372,12 +438,13 @@ int InfRcConnection::send_message(Message *m)
     ldout(infrc_msgr->cct, 20) << __func__ << " local dispatch " << *m << dendl;
     local_messages.push_back(m);
     center->dispatch_event_external(local_deliver_handler);
+    cm_lock.Unlock();
   } else {
     ldout(infrc_msgr->cct, 20) << __func__ << " pending " << *m << " wait for send." << dendl;
     pending_send.push_back(m);
     center->dispatch_event_external(read_handler);
+    cm_lock.Unlock();
   }
-  cm_lock.Unlock();
 
   return 0;
 }
@@ -410,16 +477,26 @@ void InfRcConnection::_stop()
       EventCallbackRef(new C_infrc_clean_handler(this)));
 }
 
-void InfRcConnection::fault()
+void InfRcConnection::_fault(list<Message*> *messages)
 {
   assert(cm_lock.is_locked());
+
   if (state == STATE_CLOSED) {
     ldout(infrc_msgr->cct, 10) << __func__ << " state is already STATE_CLOSED" << dendl;
+    assert(pending_send.empty());
+    if (messages) {
+      for (list<Message*>::iterator it = messages->begin(); it != messages->end(); ++it)
+        (*it)->put();
+      messages->clear();
+    }
     center->dispatch_event_external(reset_handler);
     return ;
   }
 
-  if (policy.lossy && state != STATE_BEFORE_CONNECTING) {
+  if (messages && !messages->empty())
+    pending_send.splice(pending_send.begin(), *messages);
+
+  if (policy.lossy && state != STATE_BEFORE_CONNECTING && state != STATE_CONNECTING) {
     ldout(infrc_msgr->cct, 10) << __func__ << " on lossy channel, failing" << dendl;
     center->dispatch_event_external(reset_handler);
     _stop();
@@ -431,9 +508,9 @@ void InfRcConnection::fault()
     ::close(client_setup_socket);
     client_setup_socket = -1;
   }
+  assert(qp);
+  qp->to_reset();
 
-  // FIXME: requeue sent items
-  // requeue_sent();
   if (policy.standby && !pending_send.empty()) {
     ldout(infrc_msgr->cct, 0) << __func__ << " with nothing to send, going to standby" << dendl;
     state = STATE_STANDBY;
@@ -524,7 +601,15 @@ Infiniband::QueuePairTuple InfRcConnection::build_qp_tuple(uint64_t nonce)
 void InfRcConnection::process_request(Message *message)
 {
   cm_lock.Lock();
+  if (state != STATE_OPEN) {
+    cm_lock.Unlock();
+    ldout(infrc_msgr->cct, 0) << __func__ << " current state is " << get_state_name(state) << ", discard m="
+                              << message << dendl;
+    message->put();
+    return ;
+  }
   if (message->get_seq() <= in_seq) {
+    cm_lock.Unlock();
     ldout(infrc_msgr->cct, 0) << __func__ << " got old message " << message->get_seq()
                   << " <= " << in_seq << " " << message << " " << *message
                   << ", discarding" << dendl;

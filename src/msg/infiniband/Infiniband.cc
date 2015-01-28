@@ -23,6 +23,7 @@
 #undef dout_prefix
 #define dout_prefix *_dout << "Infiniband "
 
+
 /**
  * Create a new QueuePair. This factory should be used in preference to
  * the QueuePair constructor directly, since this lets derivatives of
@@ -151,7 +152,7 @@ Infiniband::wc_status_to_string(int status)
 int Infiniband::get_lid(int port)
 {
     ibv_port_attr ipa;
-    int ret = ibv_query_port(device.ctxt, (uint8_t)(port), &ipa);
+    int ret = ibv_query_port(device->ctxt, (uint8_t)(port), &ipa);
     if (ret) {
         lderr(cct) << __func__ << " ibv_query_port failed on port "
                    << port << dendl;
@@ -211,10 +212,10 @@ ibv_srq* Infiniband::create_shared_receive_queue(uint32_t max_wr, uint32_t max_s
   ldout(cct, 20) << __func__ << " max_wr=" << max_wr << " max_sge=" << max_sge << dendl;
   ibv_srq_init_attr sia;
   memset(&sia, 0, sizeof(sia));
-  sia.srq_context = device.ctxt;
+  sia.srq_context = device->ctxt;
   sia.attr.max_wr = max_wr;
   sia.attr.max_sge = max_sge;
-  return ibv_create_srq(pd.pd, &sia);
+  return ibv_create_srq(pd->pd, &sia);
 }
 
 /**
@@ -304,9 +305,9 @@ Infiniband::QueuePair::QueuePair(Infiniband& infiniband, ibv_qp_type type,
     uint32_t max_send_wr, uint32_t max_recv_wr, uint32_t q_key)
     : infiniband(infiniband),
       type(type),
-      ctxt(infiniband.device.ctxt),
+      ctxt(infiniband.device->ctxt),
       ib_physical_port(port),
-      pd(infiniband.pd.pd),
+      pd(infiniband.pd->pd),
       srq(srq),
       qp(NULL),
       txcq(txcq),
@@ -496,6 +497,66 @@ int Infiniband::QueuePair::plumb(QueuePairTuple *qpt)
 }
 
 /**
+ * Change RC QueuePair into the RESET state.
+ *
+ * \return
+ *      -1 if the QueuePair can't switch to RESET
+ *      0 for success.
+ */
+int Infiniband::QueuePair::to_reset()
+{
+  assert(!dead);
+
+  ibv_qp_attr qpa;
+  memset(&qpa, 0, sizeof(qpa));
+  qpa.qp_state = IBV_QPS_RESET;
+
+  int mask = IBV_QP_STATE;
+  int ret = ibv_modify_qp(qp, &qpa, mask);
+  if (ret) {
+    lderr(infiniband.cct) << __func__ << " failed to transition to RESET state: "
+                          << cpp_strerror(errno) << dendl;
+    return -1;
+  }
+
+  // move from RESET to INIT state
+  memset(&qpa, 0, sizeof(qpa));
+  qpa.qp_state   = IBV_QPS_INIT;
+  qpa.pkey_index = 0;
+  qpa.port_num   = (uint8_t)(ib_physical_port);
+  qpa.qp_access_flags = IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE;
+  qpa.qkey       = q_key;
+
+  mask = IBV_QP_STATE | IBV_QP_PORT;
+  switch (type) {
+  case IBV_QPT_RC:
+      mask |= IBV_QP_ACCESS_FLAGS;
+      mask |= IBV_QP_PKEY_INDEX;
+      break;
+  case IBV_QPT_UD:
+      mask |= IBV_QP_QKEY;
+      mask |= IBV_QP_PKEY_INDEX;
+      break;
+  case IBV_QPT_RAW_PACKET:
+      break;
+  default:
+      assert(0);
+  }
+
+  ret = ibv_modify_qp(qp, &qpa, mask);
+  if (ret) {
+    lderr(infiniband.cct) << __func__ << " failed to transition to INIT state: "
+                          << cpp_strerror(errno) << dendl;
+    return -1;
+  }
+  ldout(infiniband.cct, 20) << __func__ << " successfully change queue pair to INIT:"
+                            << " qp=" << qp << dendl;
+
+  return ret;
+}
+
+
+/**
  * Change RC QueuePair into the ERROR state. This is necessary modify
  * the Queue Pair into the Error state and poll all of the relevant
  * Work Completions prior to destroying a Queue Pair.
@@ -540,7 +601,7 @@ Infiniband::CompletionChannel::~CompletionChannel()
 int Infiniband::CompletionChannel::init()
 {
   ldout(infiniband.cct, 20) << __func__ << " started." << dendl;
-  channel = ibv_create_comp_channel(infiniband.device.ctxt);
+  channel = ibv_create_comp_channel(infiniband.device->ctxt);
   if (!channel) {
     lderr(infiniband.cct) << __func__ << " failed to create receive completion channel: "
                           << cpp_strerror(errno) << dendl;
@@ -597,7 +658,7 @@ Infiniband::CompletionQueue::~CompletionQueue()
 
 int Infiniband::CompletionQueue::init()
 {
-  cq = ibv_create_cq(infiniband.device.ctxt, queue_depth, this, channel->get_channel(), 0);
+  cq = ibv_create_cq(infiniband.device->ctxt, queue_depth, this, channel->get_channel(), 0);
   if (!cq) {
     lderr(infiniband.cct) << __func__ << " failed to create receive completion queue: "
                           << cpp_strerror(errno) << dendl;

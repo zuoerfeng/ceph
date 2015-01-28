@@ -272,14 +272,14 @@ void InfRcWorker::shutdown()
 
   Mutex::Locker l(lock);
   while (!client_send_queue.empty()) {
-    pair<Message*, QueuePair*> p = client_send_queue.front();
+    pair<Message*, InfRcConnectionRef> p = client_send_queue.front();
     client_send_queue.pop_front();
     p.first->put();
   }
   client_send_queue.clear();
-  for (ceph::unordered_map<uint64_t, Message*>::iterator it = outstanding_messages.begin();
+  for (ceph::unordered_map<uint64_t, pair<Message*, InfRcConnectionRef> >::iterator it = outstanding_messages.begin();
        it != outstanding_messages.end(); ++it)
-    it->second->put();
+    it->second.first->put();
   outstanding_messages.clear();
   for (ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.begin();
        it != qp_conns.end(); ++it)
@@ -365,18 +365,20 @@ void InfRcWorker::send_pending_messages(bool locked)
   while (!client_send_queue.empty()) {
     BufferDescriptor *bd = pool->reserve_message_buffer(this);
     if (bd) {
-      pair<Message*, QueuePair*> p = client_send_queue.front();
+      pair<Message*, InfRcConnectionRef> p = client_send_queue.front();
       client_send_queue.pop_front();
-      if (p.second->is_dead()) {
-        ldout(cct, 1) << __func__ << " qp=" << p.second->get_local_qp_number()
-                      << " disconnected. Discard message=" << p.first << dendl;
-        p.first->put();
+      if (send_zero_copy(p.first, p.second, p.second->get_qp(), bd)) {
+        if (!p.second->get_qp())
+          ldout(cct, 1) << __func__ << " conn=" << p.second
+                        << " disconnected. Discard message=" << p.first << dendl;
+        else
+          ldout(cct, 1) << __func__ << " failed to send message " << p.first
+                        << " fault conn=" << p.second << dendl;
+        list<Message *> messages;
+        messages.push_back(p.first);
+        revoke_message(p.second, messages);
         pool->post_tx_buffer(this, bd);
-      } else if (send_zero_copy(p.first, p.second, bd) < 0) {
-        ldout(cct, 1) << __func__ << " failed to send message " << p.first << dendl;
-        pool->post_tx_buffer(this, bd);
-        p.first->put();
-        assert(0);
+        p.second->fault(&messages);
       }
     } else {
       break;
@@ -477,15 +479,16 @@ void InfRcWorker::handle_tx_event()
     uint64_t id = ret_array[i].wr_id;
     BufferDescriptor* bd = reinterpret_cast<BufferDescriptor*>(id);
 
-    ceph::unordered_map<uint64_t, Message*>::iterator it = outstanding_messages.find(id);
+    ceph::unordered_map<uint64_t, pair<Message*, InfRcConnectionRef> >::iterator it = outstanding_messages.find(id);
     if (it == outstanding_messages.end()) {
       lderr(cct) << __func__ << " unknown message, bd=" << id << " should be a bug?" << dendl;
       assert(0);
     }
-    ldout(cct, 20) << __func__ << " ack message =" << it->second << " seq="
-                   << it->second->get_seq() << " qpn=" << ret_array[i].qp_num
+    ldout(cct, 20) << __func__ << " ack message =" << it->second.first << " seq="
+                   << it->second.first->get_seq() << " qpn=" << ret_array[i].qp_num
                    << " bd=" << id << dendl;
 
+    InfRcConnectionRef conn = it->second.second;
     if (ret_array[i].status != IBV_WC_SUCCESS) {
       if (ret_array[i].status == IBV_WC_RETRY_EXC_ERR) {
         lderr(cct) << __func__ << " connection between server and client not working. Disconnect this now" << dendl;
@@ -496,7 +499,7 @@ void InfRcWorker::handle_tx_event()
                      << ") still inline in this side, mark down it" << dendl;
         } else {
           // Must be STOPPED
-          assert(!it->second->get_connection()->is_connected());
+          assert(!conn->is_connected());
         }
 
         lderr(cct) << __func__ << " Work Request Flushed Error: this connection's qp="
@@ -508,12 +511,15 @@ void InfRcWorker::handle_tx_event()
                    << ") status(" << ret_array[i].status << "): "
                    << infiniband->wc_status_to_string(ret_array[i].status) << dendl;
       }
-      ldout(cct, 1) << __func__ << " discard message=" << it->second << " mark down associated connection="
-                    << it->second->get_connection() << dendl;
-      it->second->get_connection()->mark_down();
+      ldout(cct, 1) << __func__ << " discard message=" << it->second.second << " mark down associated connection="
+                    << conn << dendl;
+      list<Message *> messages;
+      revoke_message(conn, messages);
+      conn->fault(&messages);
+    } else {
+      it->second.first->put();
     }
 
-    it->second->put();
     outstanding_messages.erase(it);
 
     pool->post_tx_buffer(this, bd);
@@ -560,7 +566,7 @@ void InfRcWorker::handle_async_event()
   while (1) {
     ibv_async_event async_event;
     ldout(cct, 20) << __func__ << dendl;
-    if (ibv_get_async_event(infiniband->device.ctxt, &async_event)) {
+    if (ibv_get_async_event(infiniband->device->ctxt, &async_event)) {
       if (errno == EAGAIN)
         return ;
 
@@ -581,14 +587,15 @@ void InfRcWorker::handle_async_event()
         lock.Unlock();
         return ;
       }
-      it->second.second->mark_down();
+      if (it->second.second->get_qp())
+        it->second.second->mark_down();
       dead_queue_pairs.push_back(it->second.first);
       ldout(cct, 10) << __func__ << " associated conn=" << it->second.second
                      << " stop this" << dendl;
       qp_conns.erase(it);
       lock.Unlock();
     } else {
-      ldout(cct, 0) << __func__ << " ibv_get_async_event: dev=" << infiniband->device.ctxt
+      ldout(cct, 0) << __func__ << " ibv_get_async_event: dev=" << infiniband->device->ctxt
                     << " evt: " << ibv_event_type_str(async_event.event_type)
                     << dendl;
     }
@@ -596,26 +603,40 @@ void InfRcWorker::handle_async_event()
   }
 }
 
-int InfRcWorker::submit_message(Message *m, QueuePair *qp)
+/**
+ * Submit message to worker
+ *
+ * @param m The message needed to be sent
+ * @param conn The associated connection with message
+ *
+ * @return 0 means successfully and -1 if error happend.
+ */
+int InfRcWorker::submit_message(Message *m, InfRcConnectionRef conn)
 {
   Mutex::Locker l(lock);
+  m->set_seq(conn->out_seq.inc());
+  // While InfRcConnection unlock its lock and enter submit_message, it may be
+  // fault by InfRcWorker, so we need to check this connection's state again.
+  if (!conn->is_connected()) {
+    ldout(cct, 20) << __func__ << " connection closed just now, m=" << m << dendl;
+    return -1;
+  }
+
   if (!client_send_queue.empty()) {
-    client_send_queue.push_back(make_pair(m, qp));
-    ldout(cct, 20) << __func__ << " pending message=" << *m << " to qp=" << qp << dendl;
+    client_send_queue.push_back(make_pair(m, conn));
+    ldout(cct, 20) << __func__ << " pending message=" << *m << " to conn=" << conn << dendl;
     return 0;
   }
 
-  ldout(cct, 20) << __func__ << " message=" << *m << " to qp=" << qp << dendl;
+  ldout(cct, 20) << __func__ << " message=" << *m << " to conn=" << conn << dendl;
   BufferDescriptor *bd = pool->reserve_message_buffer(this);
   if (bd) {
-    if (send_zero_copy(m, qp, bd) < 0) {
+    if (send_zero_copy(m, conn, conn->get_qp(), bd)) {
       pool->post_tx_buffer(this, bd);
-      m->put();
-      assert(0);
       return -1;
     }
   } else {
-    client_send_queue.push_back(make_pair(m, qp));
+    client_send_queue.push_back(make_pair(m, conn));
   }
   return 0;
 }
@@ -634,10 +655,12 @@ int InfRcWorker::submit_message(Message *m, QueuePair *qp)
  * \param bd
  *      BufferDescriptor used to store transmit buffer
  */
-int InfRcWorker::send_zero_copy(Message *m, QueuePair *qp, BufferDescriptor *bd)
+int InfRcWorker::send_zero_copy(Message *m, InfRcConnectionRef conn, QueuePair *qp, BufferDescriptor *bd)
 {
   ldout(cct, 20) << __func__ << " m=" << m << " qp=" << qp << " bd=" << bd << dendl;
   assert(lock.is_locked());
+  if (!qp)
+    return -1;
   bufferlist bl;
 
   // prepare everything
@@ -739,13 +762,22 @@ int InfRcWorker::send_zero_copy(Message *m, QueuePair *qp, BufferDescriptor *bd)
     tx_work_request.send_flags |= IBV_SEND_INLINE;
 
   ibv_send_wr* bad_tx_work_request;
+
+  if (cct->_conf->ms_inject_socket_failures) {
+    if (rand() % cct->_conf->ms_inject_socket_failures == 0) {
+      ldout(cct, 0) << __func__ << " injecting socket failure" << dendl;
+      qp->to_reset();
+    }
+  }
+
   if (ibv_post_send(qp->get_qp(), &tx_work_request, &bad_tx_work_request)) {
-    lderr(cct) << __func__ << " ibv_post_send failed: " << cpp_strerror(errno) << dendl;
+    lderr(cct) << __func__ << " ibv_post_send failed(most probably should be peer not ready): "
+               << cpp_strerror(errno) << dendl;
     return -1;
   }
 
   assert(!outstanding_messages.count(reinterpret_cast<uint64_t>(bd)));
-  outstanding_messages[reinterpret_cast<uint64_t>(bd)] = m;
+  outstanding_messages[reinterpret_cast<uint64_t>(bd)] = make_pair(m, conn);
   ldout(cct, 20) << __func__ << " successfully post seq=" << m->get_seq() << " qpn="
                  << qp->get_local_qp_number() << " bd=" << reinterpret_cast<uint64_t>(bd)
                  << " message(" << *m << ")" << dendl;
@@ -1324,6 +1356,15 @@ void InfRcMessenger::recv_connect()
     ssize_t len = ::recvfrom(server_setup_socket, &incoming_qpt,
                              sizeof(incoming_qpt), 0,
                              reinterpret_cast<sockaddr *>(&socket_addr.ss_addr()), &slen);
+
+    // Recv wrong qpt
+    if (cct->_conf->ms_inject_socket_failures) {
+      if (rand() % cct->_conf->ms_inject_socket_failures == 0) {
+        ldout(cct, 0) << __func__ << " injecting socket failure" << dendl;
+        len = 1;
+      }
+    }
+
     if (len <= -1) {
       if (errno != EAGAIN)
         lderr(cct) << __func__ << " recvfrom failed: " << cpp_strerror(errno) << dendl;
@@ -1392,6 +1433,15 @@ void InfRcMessenger::recv_connect()
     // now send the client back our queue pair information so they can
     // complete the initialisation.
     outgoing_qpt = conn->build_qp_tuple(incoming_qpt.get_nonce());
+
+    // Send wrong qpt
+    if (cct->_conf->ms_inject_socket_failures) {
+      if (rand() % cct->_conf->ms_inject_socket_failures == 0) {
+        ldout(cct, 0) << __func__ << " injecting socket failure" << dendl;
+        memset(&outgoing_qpt, sizeof(outgoing_qpt), 1);
+      }
+    }
+
     ldout(cct, 20) << __func__ << " sending qpt=" << outgoing_qpt << dendl;
     len = ::sendto(server_setup_socket, &outgoing_qpt,
                    sizeof(outgoing_qpt), 0,

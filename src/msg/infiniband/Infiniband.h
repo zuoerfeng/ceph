@@ -84,14 +84,19 @@ class Infiniband {
    *      If NULL, open the first one returned by the Verbs library.
    */
   explicit Infiniband(CephContext *cct, const char* device_name)
-    : cct(cct), device(device_name), pd(device) {
-      assert(set_nonblocking(device.ctxt->async_fd) == 0);
-    }
+  : cct(cct) {
+    device = new Device(device_name);
+    pd = new ProtectionDomain(device);
+    assert(set_nonblocking(device->ctxt->async_fd) == 0);
+  }
 
   /**
    * Destroy an Infiniband object.
    */
-  ~Infiniband() {}
+  ~Infiniband() {
+    delete pd;
+    delete device;
+  }
 
   class DeviceList {
    public:
@@ -153,8 +158,8 @@ class Infiniband {
 
   class ProtectionDomain {
    public:
-    explicit ProtectionDomain(Device& device)
-      : pd(ibv_alloc_pd(device.ctxt))
+    explicit ProtectionDomain(Device *device)
+      : pd(ibv_alloc_pd(device->ctxt))
     {
       if (pd == NULL) {
         derr << __func__ << " failed to allocate infiniband protection domain: "
@@ -274,6 +279,7 @@ class Infiniband {
     }
     ibv_qp* get_qp() const { return qp; }
     int plumb(QueuePairTuple *qpt);
+    int to_reset();
     int to_dead();
     bool is_dead() { return dead; }
 
@@ -375,7 +381,7 @@ class Infiniband {
      * \throw
      *      TransportException if allocation or registration failed.
      */
-    RegisteredBuffers(ProtectionDomain& pd, const uint32_t bsize,
+    RegisteredBuffers(ProtectionDomain *pd, const uint32_t bsize,
                       const uint32_t bcount)
       : buffer_size(bsize), buffer_count(bcount), base_pointer(NULL),
         descriptors(NULL) {
@@ -387,7 +393,7 @@ class Infiniband {
         assert(0);
       }
 
-      ibv_mr *mr = ibv_reg_mr(pd.pd, base_pointer, bytes,
+      ibv_mr *mr = ibv_reg_mr(pd->pd, base_pointer, bytes,
                               IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE);
       if (mr == NULL) {
         derr << __func__ << " failed to register buffer" << dendl;
@@ -463,19 +469,19 @@ class Infiniband {
                                      CompletionChannel *cc=NULL);
 
   int get_lid(int port);
-  int get_async_fd() { return device.ctxt->async_fd; }
+  int get_async_fd() { return device->ctxt->async_fd; }
 
   int post_srq_receive(ibv_srq* srq, BufferDescriptor* bd);
 
-  ibv_srq* create_shared_receive_queue(uint32_t maxWr, uint32_t maxSge);
+  ibv_srq* create_shared_receive_queue(uint32_t max_wr, uint32_t max_sge);
   int destroy_shared_receive_queue(ibv_srq *srq);
 
   int set_nonblocking(int fd);
 
   //  Keep public for 0-copy hack. nothing to see here, move along.
   CephContext *cct;
-  Device device;
-  ProtectionDomain pd;
+  Device *device;
+  ProtectionDomain *pd;
   static const uint32_t MAX_INLINE_DATA = 400;
 };
 

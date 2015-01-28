@@ -33,12 +33,13 @@ class InfRcConnection : public Connection {
   EventCenter *center;
   Mutex cm_lock;
   utime_t backoff;         // backoff time
+  utime_t last_connect;
   uint64_t nonce;
-  uint64_t out_seq, in_seq;
+  uint64_t in_seq;
   int state;
   Messenger::Policy policy;
   int client_setup_socket; // UDP socket for outgoing setup requests
-  uint64_t exchange_count;
+  int exchange_count;
   set<uint64_t> register_time_events; // need to delete it if stop
   list<Message*> pending_send;
   list<Message*> local_messages;    // local deliver
@@ -46,6 +47,7 @@ class InfRcConnection : public Connection {
     STATE_NEW,
     STATE_BEFORE_CONNECTING,
     STATE_CONNECTING,
+    STATE_CONNECTING_READY,
     STATE_ACCEPTING,
     STATE_OPEN,
     STATE_STANDBY,
@@ -56,6 +58,7 @@ class InfRcConnection : public Connection {
     const char* const statenames[] = {"STATE_NEW",
                                       "STATE_BEFORE_CONNECTING",
                                       "STATE_CONNECTING",
+                                      "STATE_CONNECTING_READY",
                                       "STATE_ACCEPTING",
                                       "STATE_OPEN",
                                       "STATE_STANDBY",
@@ -68,15 +71,15 @@ class InfRcConnection : public Connection {
   EventCallbackRef remote_reset_handler;
   EventCallbackRef local_deliver_handler;
 
-  static const uint32_t QP_EXCHANGE_MAX_TIMEOUTS = 10;
-
   static int client_try_send_qp(int client_setup_socket, Infiniband::QueuePairTuple *outgoing_qpt,
                                 Infiniband::QueuePairTuple *incoming_qpt);
   void _stop();
-  void fault();
+  void _fault(list<Message*> *messages=NULL);
+  void retry_send(Message *m);
 
  public:
   InfRcMessenger *infrc_msgr;
+  atomic_t out_seq;
 
   InfRcConnection(CephContext *c, InfRcMessenger *m, InfRcWorker *w, Infiniband::QueuePair *qp,
                   const entity_addr_t& addr, int type);
@@ -92,7 +95,7 @@ class InfRcConnection : public Connection {
 
   bool is_connected() {
     Mutex::Locker l(cm_lock);
-    return state == STATE_OPEN;
+    return state == STATE_OPEN || state == STATE_CONNECTING_READY;
   }
 
   void connect();
@@ -115,6 +118,14 @@ class InfRcConnection : public Connection {
     local_deliver_handler.reset();
   }
   void process_request(Message *m);
+  void fault(list<Message*> *messages) {
+    Mutex::Locker l(cm_lock);
+    _fault(messages);
+  }
+  Infiniband::QueuePair* get_qp() {
+    Mutex::Locker l(cm_lock);
+    return qp;
+  }
 };
 
 typedef boost::intrusive_ptr<InfRcConnection> InfRcConnectionRef;

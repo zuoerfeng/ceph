@@ -200,11 +200,11 @@ class InfRcWorker : public Thread {
    * RPCs which are waiting for a receive buffer to become available before
    * their request can be sent. See #ClientRpc::sendOrQueue().
    */
-  list<pair<Message*, QueuePair*> > client_send_queue;
+  list<pair<Message*, InfRcConnectionRef> > client_send_queue;
 
   // RPCs which are awaiting their responses from the network.
   // FIXME: need push to InfRcConnection::pending_send if qp failed
-  ceph::unordered_map<uint64_t, Message*> outstanding_messages;
+  ceph::unordered_map<uint64_t, pair<Message*, InfRcConnectionRef> > outstanding_messages;
 
   // qp_num -> InfRcConnection
   // The main usage of `qp_conns` is looking up connection by qp_num,
@@ -228,7 +228,20 @@ class InfRcWorker : public Thread {
   vector<QueuePair*> dead_queue_pairs;
 
   void process_request(bufferptr &bp, uint32_t qpnum);
-  int send_zero_copy(Message *m, QueuePair *qp, BufferDescriptor *bd);
+  int send_zero_copy(Message *m, InfRcConnectionRef conn, QueuePair* qp, BufferDescriptor *bd);
+  void revoke_message(InfRcConnectionRef conn, list<Message*> &messages) {
+    assert(lock.is_locked());
+    list<pair<Message*, InfRcConnectionRef> >::iterator prev;
+    for (list<pair<Message*, InfRcConnectionRef> >::iterator it = client_send_queue.begin();
+         it != client_send_queue.end();) {
+      prev = it;
+      ++it;
+      if (prev->second == conn) {
+        messages.push_back(prev->first);
+        client_send_queue.erase(prev);
+      }
+    }
+  }
 
  public:
   EventCenter center;
@@ -255,7 +268,7 @@ class InfRcWorker : public Thread {
    * reference; take one if you need it.
    */
   InfRcConnectionRef create_connection(const entity_addr_t &dest, int type, InfRcMessenger *m);
-  int submit_message(Message *m, QueuePair *qp);
+  int submit_message(Message *m, InfRcConnectionRef conn);
   void send_pending_messages(bool locked);
   void handle_rx_event();
   void handle_tx_event();

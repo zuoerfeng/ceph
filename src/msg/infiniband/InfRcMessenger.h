@@ -73,7 +73,7 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
 
   /**
    * The number of client receive buffers that are in use, either from
-   * outstanding_messages or from RPC responses that have borrowed these
+   * oustanding_buffers or from RPC responses that have borrowed these
    * buffers and will return them with the PayloadChunk mechanism.
    * Invariant: num_used_srq_buffers <= MAX_SHARED_RX_QUEUE_DEPTH.
    */
@@ -81,11 +81,11 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
   RegisteredBuffers *tx_buffers;    // Infiniband transmit buffers.
   ibv_srq*         srq;             // shared receive work queue
 
-  Mutex lock;                       // protect `num_used_srq_buffers`, `pending_sent_workers`
+  Mutex lock;                       // protect `num_used_srq_buffers`, `pending_sent_conns`
                                     // `free_tx_buffers`
   uint32_t num_used_srq_buffers;
   vector<BufferDescriptor*> free_tx_buffers;
-  list<InfRcWorker*> pending_sent_workers;
+  list<InfRcConnectionRef> pending_sent_conns;
 
  public:
   /// Starting address of the region registered with the HCA for zero-copy
@@ -131,14 +131,14 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
   }
   void barrier();
   void shutdown();
-  BufferDescriptor* reserve_message_buffer(InfRcWorker *w);
+  BufferDescriptor* reserve_message_buffer(InfRcConnectionRef c);
   int post_srq_receive(const char *buf) {
     BufferDescriptor *bd = rx_buffers->get_descriptor(buf);
     assert(bd);
     return post_srq_receive(bd);
   }
   int post_srq_receive(BufferDescriptor *bd);
-  int post_tx_buffer(InfRcWorker *w, BufferDescriptor *bd);
+  int post_tx_buffer(BufferDescriptor *bd, bool wakeup);
   uint32_t incr_used_srq_buffers() {
     Mutex::Locker l(lock);
     ++num_used_srq_buffers;
@@ -169,11 +169,7 @@ class InfRcWorker : public Thread {
   // Infiniband controller needs to fetch more data from host memory,
   // which results in a higher number of on-controller cache misses.
   static const uint32_t MAX_TX_QUEUE_DEPTH = 16;
-  static const uint32_t MIN_ZERO_COPY_SGE = 500;
   static const uint32_t MIN_PREFETCH_LEN = 1024;
-  // With 64 KB seglets 1 MB is fractured into 16 or 17 pieces, plus we
-  // need an entry for the headers.
-  enum { MAX_TX_SGE_COUNT = 24 };
   static const uint32_t MAX_SHARED_RX_QUEUE_DEPTH = 32;
 
   static const uint32_t MIN_ACK_LEN = 128;
@@ -193,18 +189,11 @@ class InfRcWorker : public Thread {
     /// true, specifying we haven't learned our addr; set false when we find it.
   // maybe this should be protected by the lock?
 
-  Mutex lock;                       // protect `client_send_queue`,
-                                    // `outstanding_messages`, `qp_conns`, `dead_queue_pairs`
-                                    // whether to reap queue pair
-  /**
-   * RPCs which are waiting for a receive buffer to become available before
-   * their request can be sent. See #ClientRpc::sendOrQueue().
-   */
-  list<pair<Message*, InfRcConnectionRef> > client_send_queue;
+  Mutex lock;                       // protect `oustanding_buffers`, `qp_conns`,
+                                    // `dead_queue_pairs` whether to reap queue pair
 
   // RPCs which are awaiting their responses from the network.
-  // FIXME: need push to InfRcConnection::pending_send if qp failed
-  ceph::unordered_map<uint64_t, pair<Message*, InfRcConnectionRef> > outstanding_messages;
+  ceph::unordered_map<uint64_t, InfRcConnectionRef> outstanding_buffers;
 
   // qp_num -> InfRcConnection
   // The main usage of `qp_conns` is looking up connection by qp_num,
@@ -229,19 +218,6 @@ class InfRcWorker : public Thread {
 
   void process_request(bufferptr &bp, uint32_t qpnum);
   int send_zero_copy(Message *m, InfRcConnectionRef conn, QueuePair* qp, BufferDescriptor *bd);
-  void revoke_message(InfRcConnectionRef conn, list<Message*> &messages) {
-    assert(lock.is_locked());
-    list<pair<Message*, InfRcConnectionRef> >::iterator prev;
-    for (list<pair<Message*, InfRcConnectionRef> >::iterator it = client_send_queue.begin();
-         it != client_send_queue.end();) {
-      prev = it;
-      ++it;
-      if (prev->second == conn) {
-        messages.push_back(prev->first);
-        client_send_queue.erase(prev);
-      }
-    }
-  }
 
  public:
   EventCenter center;
@@ -274,6 +250,8 @@ class InfRcWorker : public Thread {
   void handle_tx_event();
   void handle_async_event();
   int get_lid() { return pool->get_lid(); }
+  BufferDescriptor* get_message_buffer(InfRcConnectionRef conn);
+  void put_message_buffer(BufferDescriptor *bd);
 };
 
 

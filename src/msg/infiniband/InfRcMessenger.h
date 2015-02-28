@@ -137,7 +137,13 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
     assert(bd);
     return post_srq_receive(bd);
   }
-  int post_srq_receive(BufferDescriptor *bd);
+  int post_srq_receive(BufferDescriptor *bd) {
+    if (infiniband->post_srq_receive(srq, bd))
+      return -1;
+    Mutex::Locker l(lock);
+    --num_used_srq_buffers;
+    return 0;
+  }
   int post_tx_buffer(BufferDescriptor *bd, bool wakeup);
   uint32_t incr_used_srq_buffers() {
     Mutex::Locker l(lock);
@@ -162,7 +168,6 @@ class InfRcWorker : public Thread {
   bool done;
   int id;
 
-  static const uint32_t MAX_MESSAGE_LEN = ((1 << 23) + 200);
   // Since we always use at most 1 SGE per receive request, there is no need
   // to set this parameter any higher. In fact, larger values for this
   // parameter result in increased descriptor size, which means that the
@@ -216,7 +221,6 @@ class InfRcWorker : public Thread {
   /// no outstanding transmit buffers to be lost.
   vector<QueuePair*> dead_queue_pairs;
 
-  void process_request(bufferptr &bp, uint32_t qpnum);
   int send_zero_copy(Message *m, InfRcConnectionRef conn, QueuePair* qp, BufferDescriptor *bd);
 
  public:
@@ -339,13 +343,6 @@ class InfRcMessenger : public SimplePolicyMessenger {
    * @defgroup Inner classes
    * @{
    */
-
-  Connection *create_anon_connection() {
-    Mutex::Locker l(lock);
-    InfRcWorker *w = pool->get_worker();
-    InfRcConnectionRef conn = w->create_connection(entity_addr_t(), CEPH_ENTITY_TYPE_ANY, this);
-    return conn.get();
-  }
 
  protected:
   /**

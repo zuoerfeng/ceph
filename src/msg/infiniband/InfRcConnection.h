@@ -31,8 +31,8 @@ class InfRcConnection : public Connection {
   // need an entry for the headers.
   enum { MAX_TX_SGE_COUNT = 24 };
   static const uint32_t MIN_ZERO_COPY_SGE = 500;
-  static const uint32_t MAX_MESSAGE_LEN = ((1 << 23) + 200);
 
+  Infiniband::Infiniband *infiniband;
   Infiniband::QueuePair *qp;
 
   // Communicate Management
@@ -48,12 +48,21 @@ class InfRcConnection : public Connection {
   int state;
   Messenger::Policy policy;
   int client_setup_socket; // UDP socket for outgoing setup requests
-  int exchange_count;
+  uint32_t exchange_count;
+  Infiniband::QueuePairTuple peer_qpt;
   set<uint64_t> register_time_events; // need to delete it if stop
   list<Message*> pending_send;
   list<Message*> local_messages;      // local deliver
-  list<pair<uint64_t, Message*> > sent;
-  Infiniband::Infiniband *infiniband;
+
+  bufferlist pending_bl;
+  Message *pending_msg;
+  list<pair<uint64_t, Message*> > sent_queue;
+
+  uint64_t data_left;
+  ceph_msg_header rcv_header;
+  ceph_msg_footer rcv_footer;
+  bufferlist front, middle, data_bl;
+
   enum {
     STATE_NEW,
     STATE_BEFORE_CONNECTING,
@@ -94,15 +103,28 @@ class InfRcConnection : public Connection {
   void was_session_reset();
   int randomize_out_seq();
   void discard_pending_queue_to(uint64_t seq);
-  int send_zero_copy(Message *m, Infiniband::BufferDescriptor *bd);
+  int send_zero_copy_msg(Message *m, Infiniband::BufferDescriptor *bd);
+  int send_zero_copy(bufferlist &bl, Infiniband::BufferDescriptor *bd, Message *m);
   int _ready(Infiniband::QueuePairTuple &incoming_qpt,
              Infiniband::QueuePairTuple &outgoing_qpt);
   Infiniband::QueuePairTuple build_qp_tuple();
   void requeue_sent() {
-    for (list<pair<uint64_t, Message*> >::reverse_iterator it = sent.rbegin();
-         it != sent.rend(); ++it)
-      pending_send.insert(pending_send.begin(), it->second);
-    sent.clear();
+    Message *last_msg = pending_msg;
+    if (pending_msg) {
+      pending_send.insert(pending_send.begin(), last_msg);
+      pending_msg = NULL;
+      pending_bl.clear();
+    }
+    for (list<pair<uint64_t, Message*> >::reverse_iterator it = sent_queue.rbegin();
+         it != sent_queue.rend(); ++it) {
+      if (last_msg != it->second) {
+        last_msg = it->second;
+        pending_send.insert(pending_send.begin(), last_msg);
+      } else {
+        it->second->put();
+      }
+    }
+    sent_queue.clear();
   }
 
  public:
@@ -140,6 +162,7 @@ class InfRcConnection : public Connection {
   }
 
  public:
+  bool in_queue() const { return !pending_send.empty() || pending_bl.length(); }
   void process();
   void wakeup_from(uint64_t id);
   void local_deliver();
@@ -150,7 +173,7 @@ class InfRcConnection : public Connection {
     remote_reset_handler.reset();
     local_deliver_handler.reset();
   }
-  void process_request(Message *m);
+  void process_request(bufferptr &bp);
   Infiniband::QueuePair* get_qp() {
     Mutex::Locker l(cm_lock);
     return qp;

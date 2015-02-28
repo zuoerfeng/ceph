@@ -141,6 +141,8 @@ class C_infrc_async_ev_handler : public EventCallback {
  public:
   C_infrc_async_ev_handler(InfRcWorker *w): worker(w) {}
   void do_request(int id) {
+    worker->handle_rx_event();
+    worker->handle_tx_event();
     worker->handle_async_event();
   }
 };
@@ -294,51 +296,6 @@ InfRcConnectionRef InfRcWorker::create_connection(const entity_addr_t& dest, int
   return conn;
 }
 
-void InfRcWorker::process_request(bufferptr &bp, uint32_t qpnum)
-{
-  ldout(cct, 20) << __func__ << " bp(" << bp.length() << ")=" << bp << " qpnum=" << qpnum << dendl;
-  bufferlist front, middle, data;
-  ceph_msg_header &header(*reinterpret_cast<ceph_msg_header*>(bp.c_str()));
-  ceph_msg_footer &footer(*reinterpret_cast<ceph_msg_footer*>(bp.c_str()+bp.length()-sizeof(ceph_msg_footer)));
-  uint32_t total_len = header.front_len + header.middle_len + header.data_len + sizeof(ceph_msg_header) + sizeof(ceph_msg_footer);
-  if (total_len != bp.length()) {
-    // FIXME do what?
-    assert(0);
-  }
-
-  uint32_t offset = sizeof(ceph_msg_header);
-  front.append(bp, offset, header.front_len);
-  offset += header.front_len;
-  middle.append(bp, offset, header.middle_len);
-  offset += header.middle_len;
-  data.append(bp, offset, header.data_len);
-  Message *message = decode_message(cct, 0, header, footer, front, middle, data);
-  if (!message) {
-    ldout(cct, 1) << __func__ << " decode message failed, dropped" << dendl;
-    return ;
-  }
-  utime_t now;
-  message->set_recv_stamp(now);
-  message->set_throttle_stamp(now);
-  message->set_recv_complete_stamp(now);
-  InfRcConnectionRef conn = NULL;
-  {
-    Mutex::Locker l(lock);
-    ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.find(qpnum);
-    if (it == qp_conns.end()) {
-      // discard message
-      ldout(cct, 0) << __func__ << " missing qp_num " << qpnum << ", discard message "
-                    << *message << dendl;
-      message->put();
-      return ;
-    }
-    conn = it->second.second;
-    message->set_connection(conn);
-  }
-
-  conn->process_request(message);
-}
-
 /**
  * Called from main event loop when a RX CQ notification is available.
  */
@@ -384,7 +341,18 @@ void InfRcWorker::handle_rx_event()
           buffer::create_free_hook(response->byte_len, bd->buffer,
                                    infrc_buffer_post_buffer, pool));
     }
-    process_request(bp, response->qp_num);
+
+    lock.Lock();
+    ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.find(response->qp_num);
+    lock.Unlock();
+    if (it == qp_conns.end()) {
+      // discard buffer
+      ldout(cct, 0) << __func__ << " missing qp_num " << response->qp_num << ", discard bd "
+                    << bd << dendl;
+    } else {
+      it->second.second->process_request(bp);
+    }
+
     ldout(cct, 20) << __func__ << " Received message from " << response->src_qp
                     << " with " << response->byte_len << " bytes" << dendl;
   }
@@ -678,25 +646,15 @@ void InfRcWorkerPool::shutdown()
 }
 
 /**
- * Add the given BufferDescriptor to the given shared receive queue.
+ * Add the given BufferDescriptor to the given free queue.
  *
  * \param[in] bd
  *      The BufferDescriptor to enqueue.
+ * \param[in] wakeup
+ *      Whether wakeup pending connections
  * \return
  *      0 if success or -1 for failure
  */
-int InfRcWorkerPool::post_srq_receive(BufferDescriptor *bd)
-{
-  ldout(cct, 20) << __func__ << " bd=" << reinterpret_cast<uint64_t>(bd) << dendl;
-  if (infiniband->post_srq_receive(srq, bd)) {
-    return -1;
-  }
-
-  Mutex::Locker l(lock);
-  --num_used_srq_buffers;
-  return 0;
-}
-
 int InfRcWorkerPool::post_tx_buffer(BufferDescriptor *bd, bool wakeup)
 {
   ldout(cct, 20) << __func__ << " bd=" << reinterpret_cast<uint64_t>(bd) << dendl;

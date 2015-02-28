@@ -128,7 +128,7 @@ class C_infrc_handle_dispatch : public EventCallback {
 };
 
 class C_infrc_write : public EventCallback {
-  InfRcConnection *conn;
+  InfRcConnectionRef conn;
 
  public:
   C_infrc_write(InfRcConnection *c): conn(c) {}
@@ -141,10 +141,10 @@ class C_infrc_write : public EventCallback {
 InfRcConnection::InfRcConnection(CephContext *c, InfRcMessenger *m, InfRcWorker *w,
                                  InfRcWorkerPool *p, Infiniband::QueuePair *qp,
                                  Infiniband *ib, const entity_addr_t& addr, int type)
-  : Connection(c, m), qp(qp), worker(w), pool(p), center(&w->center),
+  : Connection(c, m), infiniband(ib), qp(qp), worker(w), pool(p), center(&w->center),
     cm_lock("InfRcConnection::cm_lock"), global_seq(0), connect_seq(0),
     out_seq(0), in_seq(0), state(STATE_NEW), client_setup_socket(-1), exchange_count(0),
-    infiniband(ib), infrc_msgr(m)
+    pending_msg(NULL), data_left(0), infrc_msgr(m)
 {
   set_peer_type(type);
   set_peer_addr(addr);
@@ -291,16 +291,19 @@ void InfRcConnection::process()
               ldout(infrc_msgr->cct, 1) << __func__ << " timeout since last connect=" << last_connect
                                         << " retry connect" << dendl;
             } else {
-              // avoid time precious problem and leak retry event
-              register_time_events.insert(center->create_time_event(
-                      diff.to_nsec()/1000 + 10000, EventCallbackRef(new C_infrc_wakeup(this))));
-              ldout(infrc_msgr->cct, 20) << __func__ << " still has " << diff.to_msec() << "ms"
-                                         << " recreate time event" << dendl;
+              if (register_time_events.empty()) {
+                // avoid time precious problem and leak retry event
+                register_time_events.insert(center->create_time_event(
+                        diff.to_nsec()/1000 + 10000, EventCallbackRef(new C_infrc_wakeup(this))));
+                ldout(infrc_msgr->cct, 20) << __func__ << " still has " << diff.to_msec() << "ms"
+                                           << " recreate time event" << dendl;
+              }
               break;
             }
           } else {
             lderr(infrc_msgr->cct) << __func__ << " recv returned error " << errno << ": "
                                    << cpp_strerror(errno) << dendl;
+            goto fail;
           }
         } else if (len != sizeof(incoming_qpt)) {
           lderr(infrc_msgr->cct) << __func__ << " recvfrom returned bad length (" << len
@@ -363,7 +366,7 @@ void InfRcConnection::process()
       {
         ldout(infrc_msgr->cct, 10) << __func__ << " ready to send/redeive to "
                                    << get_peer_addr() << dendl;
-        if (!pending_send.empty()) {
+        if (in_queue()) {
           center->dispatch_event_external(write_handler);
         }
         break;
@@ -384,9 +387,11 @@ void InfRcConnection::process()
     }
     continue;
 
+  } while (prev_state != state);
+
+  return ;
 fail:
     _fault();
-  } while (prev_state != state);
 }
 
 void InfRcConnection::handle_other_tag(Infiniband::QueuePairTuple &incoming_qpt)
@@ -458,11 +463,10 @@ int InfRcConnection::send_message(Message *m)
   Mutex::Locker l(cm_lock);
   m->set_seq(++out_seq);
   if (state == STATE_OPEN) {
-    if (pending_send.empty()) {
+    if (!in_queue()) {
       Infiniband::BufferDescriptor *bd = worker->get_message_buffer(this);
       if (bd) {
-        if (send_zero_copy(m, bd)) {
-          ldout(infrc_msgr->cct, 1) << __func__ << " failed to send message " << m << dendl;
+        if (send_zero_copy_msg(m, bd) < 0) {
           pending_send.push_back(m);
           worker->put_message_buffer(bd);
           _fault();
@@ -490,6 +494,41 @@ int InfRcConnection::send_message(Message *m)
   return 0;
 }
 
+int InfRcConnection::send_zero_copy_msg(Message *m, Infiniband::BufferDescriptor *bd)
+{
+  ldout(infrc_msgr->cct, 20) << __func__ << " m=" << m << " bd=" << reinterpret_cast<uint64_t>(bd) << dendl;
+
+  assert(!pending_bl.length());
+  bufferlist bl;
+  // prepare everything
+  ceph_msg_header& header = m->get_header();
+  ceph_msg_footer& footer = m->get_footer();
+
+  bl.append((char*)&header, sizeof(header));
+  bl.append(m->get_payload());
+  bl.append(m->get_middle());
+  bl.append((char*)&footer, sizeof(footer));
+  bl.append(m->get_data());
+
+  int r = send_zero_copy(bl, bd, m);
+  if (r > 0) {
+    assert(!pending_bl.length());
+    bl.swap(pending_bl);
+    center->dispatch_event_external(write_handler);
+    ldout(infrc_msgr->cct, 20) << __func__ << " partial post seq=" << m->get_seq() << " qpn="
+                               << qp->get_local_qp_number() << " bd=" << reinterpret_cast<uint64_t>(bd)
+                               << " message(" << *m << ")" << dendl;
+  } else if (r == 0) {
+    ldout(infrc_msgr->cct, 20) << __func__ << " successfully post seq=" << m->get_seq() << " qpn="
+                               << qp->get_local_qp_number() << " bd=" << reinterpret_cast<uint64_t>(bd)
+                               << " message(" << *m << ")" << dendl;
+  } else {
+    ldout(infrc_msgr->cct, 1) << __func__ << " failed to send message " << m << dendl;
+  }
+
+  return r;
+}
+
 /**
  * Post a message for transmit by the HCA, attempting to zero-copy any
  * data from registered buffers (currently only seglets that are part of
@@ -503,32 +542,14 @@ int InfRcConnection::send_message(Message *m)
  *      Queue pair on which to transmit the message.
  * \param bd
  *      BufferDescriptor used to store transmit buffer
+ * \return
+ *      0 if success or -1 for failure, 1 means exist remaining buffer
  */
-int InfRcConnection::send_zero_copy(Message *m, Infiniband::BufferDescriptor *bd)
+int InfRcConnection::send_zero_copy(bufferlist &bl, Infiniband::BufferDescriptor *bd,
+                                    Message *m)
 {
-  ldout(infrc_msgr->cct, 20) << __func__ << " m=" << m << " qp=" << qp << " bd="
-                             << reinterpret_cast<uint64_t>(bd) << dendl;
   assert(cm_lock.is_locked());
   assert(qp);
-  bufferlist bl;
-
-  // prepare everything
-  ceph_msg_header& header = m->get_header();
-  ceph_msg_footer& footer = m->get_footer();
-
-  bl.append((char*)&header, sizeof(header));
-  bl.append(m->get_payload());
-  bl.append(m->get_middle());
-  bl.append(m->get_data());
-  bl.append((char*)&footer, sizeof(footer));
-
-  if (bl.length() > MAX_MESSAGE_LEN) {
-    lderr(infrc_msgr->cct) << __func__ << " message exceeds maximum message size "
-               << "(attempted " << bl.length() << " bytes, maximum "
-               << MAX_MESSAGE_LEN << " bytes)" << dendl;
-    assert(0);
-  }
-
   const bool allow_zero_copy = true;
   ibv_sge isge[MAX_TX_SGE_COUNT];
 
@@ -543,7 +564,11 @@ int InfRcConnection::send_zero_copy(Message *m, Infiniband::BufferDescriptor *bd
   // must go into the next sge.
   char* unadded_start = bd->buffer;
   char* unadded_end = bd->buffer;
+  uint64_t bd_left = bd->bytes;
+  uint64_t sent = 0;
 
+  ldout(infrc_msgr->cct, 20) << __func__ << " associated message=" << m << " seq=" << m->get_seq()
+                             << " bd_left=" << bd_left << " bl length=" << bl.length() << dendl;
   list<bufferptr>::const_iterator it = bl.buffers().begin();
   while (it != bl.buffers().end()) {
     const uintptr_t addr = reinterpret_cast<const uintptr_t>(it->c_str());
@@ -579,9 +604,15 @@ int InfRcConnection::send_zero_copy(Message *m, Infiniband::BufferDescriptor *bd
       isge[current_sge].length = it->length();
       isge[current_sge].lkey = pool->log_memory_region->lkey;
       ++current_sge;
+      sent += it->length();
     } else {
-      memcpy(unadded_end, it->c_str(), it->length());
-      unadded_end += it->length();
+      uint64_t copied = MIN(it->length(), bd_left);
+      memcpy(unadded_end, it->c_str(), copied);
+      unadded_end += copied;
+      bd_left -= copied;
+      sent += copied;
+      if (bd_left == 0)
+        break;
     }
     it++;
     ++current_chunk;
@@ -625,11 +656,22 @@ int InfRcConnection::send_zero_copy(Message *m, Infiniband::BufferDescriptor *bd
     return -1;
   }
 
-  ldout(infrc_msgr->cct, 20) << __func__ << " successfully post seq=" << m->get_seq() << " qpn="
-                             << qp->get_local_qp_number() << " bd=" << reinterpret_cast<uint64_t>(bd)
-                             << " message(" << *m << ")" << dendl;
   if (!policy.lossy)
-    sent.push_back(make_pair(reinterpret_cast<uint64_t>(bd), m));
+    sent_queue.push_back(make_pair(reinterpret_cast<uint64_t>(bd), m));
+
+  if (sent != bl.length()) {
+    // unfinished bl
+    ldout(infrc_msgr->cct, 10) << __func__ << " remaining " << bl.length()-sent << " bytes wait for sent" << dendl;
+    bufferlist s;
+    bl.splice(sent, bl.length()-sent, &s);
+    s.swap(bl);
+    // in case of ack_message release pending message
+    if (!policy.lossy) {
+      pending_msg = m;
+      pending_msg->get();
+    }
+    return 1;
+  }
   return 0;
 }
 
@@ -644,17 +686,28 @@ bool InfRcConnection::send_pending_messages()
   if (state != STATE_OPEN)
     return true;
 
-  while (!pending_send.empty()) {
+  int r;
+  while (in_queue()) {
     Infiniband::BufferDescriptor *bd = worker->get_message_buffer(this);
     if (bd) {
-      Message *m = pending_send.front();
-      if (send_zero_copy(m, bd)) {
-        ldout(infrc_msgr->cct, 1) << __func__ << " failed to send message " << m << dendl;
+      if (pending_bl.length()) {
+        assert(pending_msg);
+        r = send_zero_copy(pending_bl, bd, pending_msg);
+        if (r == 0) {
+          pending_bl.clear();
+          pending_msg = NULL;
+        }
+      } else {
+        Message *m = pending_send.front();
+        r = send_zero_copy_msg(m, bd);
+        if (r >= 0)
+          pending_send.pop_front();
+      }
+      if (r < 0) {
         worker->put_message_buffer(bd);
         _fault();
         break;
       }
-      pending_send.pop_front();
     } else {
       return false;
     }
@@ -677,16 +730,13 @@ void InfRcConnection::_stop()
     qp->to_dead();
     qp = NULL;
   }
+  requeue_sent();
   while (!pending_send.empty()) {
     Message *m = pending_send.front();
     pending_send.pop_front();
     m->put();
   }
-  while (!sent.empty()) {
-    pair<uint64_t, Message*> p = sent.front();
-    sent.pop_front();
-    p.second->put();
-  }
+  data_left = 0;
   for (set<uint64_t>::iterator it = register_time_events.begin();
        it != register_time_events.end(); ++it)
     center->delete_time_event(*it);
@@ -707,6 +757,7 @@ void InfRcConnection::_fault()
   }
 
   requeue_sent();
+  data_left = 0;
 
   if (policy.lossy &&
       state != STATE_BEFORE_CONNECTING && state != STATE_CONNECTING_SENDING && state != STATE_CONNECTING) {
@@ -724,7 +775,7 @@ void InfRcConnection::_fault()
   assert(qp);
   qp->to_reset();
 
-  if (policy.standby && !pending_send.empty()) {
+  if (policy.standby && !in_queue()) {
     ldout(infrc_msgr->cct, 0) << __func__ << " with nothing to send, going to standby" << dendl;
     state = STATE_STANDBY;
     return;
@@ -733,8 +784,19 @@ void InfRcConnection::_fault()
   if (state != STATE_CONNECTING_SENDING && state != STATE_CONNECTING && state != STATE_BEFORE_CONNECTING) {
     // policy maybe empty when state is in accepting
     if (policy.server) {
-      ldout(infrc_msgr->cct, 0) << __func__ << " server, going to standby" << dendl;
-      state = STATE_STANDBY;
+      if (in_queue() && state == STATE_OPEN) {
+        assert(peer_qpt.get_local_qp_number());
+        ldout(infrc_msgr->cct, 0) << __func__ << " try plumb again with qpt(" << peer_qpt << ")." << dendl;
+        if (qp->plumb(&peer_qpt) < 0) {
+          ldout(infrc_msgr->cct, 0) << __func__ << " plumb error in fault, standby" << dendl;
+          state = STATE_STANDBY;
+        } else {
+          center->dispatch_event_external(write_handler);
+        }
+      } else {
+        ldout(infrc_msgr->cct, 0) << __func__ << " server, going to standby" << dendl;
+        state = STATE_STANDBY;
+      }
     } else {
       ldout(infrc_msgr->cct, 0) << __func__ << " initiating reconnect" << dendl;
       connect_seq++;
@@ -793,11 +855,13 @@ void InfRcConnection::was_session_reset()
 {
   ldout(infrc_msgr->cct, 10) << __func__ << " started" << dendl;
 
+  requeue_sent();
   while (!pending_send.empty()) {
     Message *m = pending_send.front();
     pending_send.pop_front();
     m->put();
   }
+  data_left = 0;
   center->dispatch_event_external(remote_reset_handler);
 
   if (randomize_out_seq()) {
@@ -822,6 +886,7 @@ int InfRcConnection::_ready(Infiniband::QueuePairTuple &incoming_qpt,
   ldout(infrc_msgr->cct, 10) << __func__ << " qpt=" << incoming_qpt << dendl;
   int r = qp->plumb(&incoming_qpt);
   if (r == 0) {
+    peer_qpt = incoming_qpt;
     center->dispatch_event_external(
         EventCallbackRef(new C_infrc_deliver_accept(infrc_msgr, this)));
     infrc_msgr->ms_deliver_handle_fast_accept(this);
@@ -829,7 +894,7 @@ int InfRcConnection::_ready(Infiniband::QueuePairTuple &incoming_qpt,
     global_seq = incoming_qpt.get_global_seq();
     state = STATE_OPEN;
     outgoing_qpt = build_qp_tuple();
-    if (!pending_send.empty())
+    if (in_queue())
       center->dispatch_event_external(write_handler);
   } else {
     _fault();
@@ -868,18 +933,66 @@ Infiniband::QueuePairTuple InfRcConnection::build_qp_tuple()
   return t;
 }
 
-void InfRcConnection::process_request(Message *message)
+void InfRcConnection::process_request(bufferptr &bp)
 {
-  cm_lock.Lock();
+  ldout(infrc_msgr->cct, 20) << __func__ << " data_left=" << data_left << ": " << bp << dendl;
+  Mutex::Locker l(cm_lock);
   if (state != STATE_OPEN) {
-    cm_lock.Unlock();
-    ldout(infrc_msgr->cct, 0) << __func__ << " current state is " << get_state_name(state) << ", discard m="
-                              << message << dendl;
-    message->put();
+    ldout(infrc_msgr->cct, 0) << __func__ << " current state is " << get_state_name(state) << ", discard bp="
+                              << bp << dendl;
     return ;
   }
+
+  uint32_t copied, offset = 0;
+  if (!data_left) {
+    // new message
+    front.clear();
+    middle.clear();
+    data_bl.clear();
+    rcv_header = *reinterpret_cast<ceph_msg_header*>(bp.c_str());
+    ldout(infrc_msgr->cct, 20) << __func__ << " got header type=" << rcv_header.type
+                               << " src " << entity_name_t(rcv_header.src)
+                               << " front=" << rcv_header.front_len
+                               << " middle=" << rcv_header.middle_len
+                               << " data=" << rcv_header.data_len
+                               << " off " << rcv_header.data_off << dendl;
+
+    assert(rcv_header.front_len + rcv_header.middle_len + sizeof(ceph_msg_header) + sizeof(ceph_msg_footer) <= bp.length());
+    offset = sizeof(ceph_msg_header);
+    front.append(bp, offset, rcv_header.front_len);
+    offset += rcv_header.front_len;
+    middle.append(bp, offset, rcv_header.middle_len);
+    offset += rcv_header.middle_len;
+    rcv_footer = *reinterpret_cast<ceph_msg_footer*>(bp.c_str()+offset);
+    offset += sizeof(ceph_msg_footer);
+    data_left = rcv_header.data_len;
+  }
+
+  copied = MIN(data_left, bp.length()-offset);
+  data_bl.append(bp, offset, copied);
+  data_left -= copied;
+
+  if (data_left) {
+    ldout(infrc_msgr->cct, 20) << __func__ << " got partial buffer(" << bp.length() << "), left "
+                               << data_left << dendl;
+    return ;
+  }
+
+  ldout(infrc_msgr->cct, 20) << __func__ << " got " << front.length() << " + " << middle.length()
+                              << " + " << data_bl.length() << " byte message" << dendl;
+  Message *message = decode_message(infrc_msgr->cct, 0, rcv_header, rcv_footer, front, middle, data_bl);
+  if (!message) {
+    ldout(infrc_msgr->cct, 1) << __func__ << " decode message failed, dropped" << dendl;
+    return ;
+  }
+
+  utime_t now = ceph_clock_now(infrc_msgr->cct);
+  message->set_recv_stamp(now);
+  message->set_throttle_stamp(now);
+  message->set_recv_complete_stamp(now);
+  message->set_connection(this);
+
   if (message->get_seq() <= in_seq) {
-    cm_lock.Unlock();
     ldout(infrc_msgr->cct, 0) << __func__ << " got old message " << message->get_seq()
                   << " <= " << in_seq << " " << message << " " << *message
                   << ", discarding" << dendl;
@@ -909,7 +1022,6 @@ void InfRcConnection::process_request(Message *message)
     center->dispatch_event_external(
         EventCallbackRef(new C_infrc_handle_dispatch(infrc_msgr, message)));
   }
-  cm_lock.Unlock();
 }
 
 void InfRcConnection::ack_message(ibv_wc &wc, Infiniband::BufferDescriptor *bd)
@@ -928,8 +1040,8 @@ void InfRcConnection::ack_message(ibv_wc &wc, Infiniband::BufferDescriptor *bd)
                              << infiniband->wc_status_to_string(wc.status) << dendl;
     }
     _fault();
-  } else if (!sent.empty()) {
-    pair<uint64_t, Message*> p = sent.front();
+  } else if (!sent_queue.empty()) {
+    pair<uint64_t, Message*> p = sent_queue.front();
     Message *m = p.second;
     if (p.first != reinterpret_cast<uint64_t>(bd)) {
       ldout(infrc_msgr->cct, 1) << __func__ << " it should be a reset for qp, dropping message " << m << dendl;
@@ -937,21 +1049,23 @@ void InfRcConnection::ack_message(ibv_wc &wc, Infiniband::BufferDescriptor *bd)
     }
     ldout(infrc_msgr->cct, 20) << __func__ << " m=" << m << " seq=" << m->get_seq()
                                << " qpn=" << qp->get_local_qp_number() << " bd=" << wc.wr_id << dendl;
+    sent_queue.pop_front();
     m->put();
-    sent.pop_front();
   }
 }
 
 bool InfRcConnection::replace(Infiniband::QueuePairTuple &incoming_qpt,
                               Infiniband::QueuePairTuple &outgoing_qpt)
 {
-  if (rand() % infrc_msgr->cct->_conf->ms_inject_socket_failures == 0 &&
-      infrc_msgr->cct->_conf->ms_inject_internal_delays) {
-    ldout(infrc_msgr->cct, 10) << __func__ << " sleep for "
-                         << infrc_msgr->cct->_conf->ms_inject_internal_delays << dendl;
-    utime_t t;
-    t.set_from_double(infrc_msgr->cct->_conf->ms_inject_internal_delays);
-    t.sleep();
+  if (infrc_msgr->cct->_conf->ms_inject_socket_failures && client_setup_socket >= 0) {
+    if (rand() % infrc_msgr->cct->_conf->ms_inject_socket_failures == 0 &&
+        infrc_msgr->cct->_conf->ms_inject_internal_delays) {
+      ldout(infrc_msgr->cct, 10) << __func__ << " sleep for "
+                           << infrc_msgr->cct->_conf->ms_inject_internal_delays << dendl;
+      utime_t t;
+      t.set_from_double(infrc_msgr->cct->_conf->ms_inject_internal_delays);
+      t.sleep();
+    }
   }
 
   Mutex::Locker l(cm_lock);
@@ -1045,6 +1159,7 @@ bool InfRcConnection::replace(Infiniband::QueuePairTuple &incoming_qpt,
 
  replace:
   requeue_sent();
+  data_left = 0;
   discard_pending_queue_to(incoming_qpt.get_msg_seq());
   if (qp->to_reset()) {
     ldout(infrc_msgr->cct, 5) << __func__ << " failed to reset qp=" << qp << dendl;

@@ -174,7 +174,7 @@ int Infiniband::get_lid(int port)
  */
 int Infiniband::post_srq_receive(ibv_srq* srq, BufferDescriptor *bd)
 {
-  ldout(cct, 20) << __func__ << " srq=" << srq << " bd=" << bd << dendl;
+  ldout(cct, 20) << __func__ << " srq=" << srq << " bd=" << bd << " bytes=" << bd->bytes << dendl;
   ibv_sge isge;
   isge.addr = reinterpret_cast<uint64_t>(bd->buffer);
   isge.length = bd->bytes;

@@ -495,7 +495,7 @@ class Infiniband {
 
 inline ostream& operator<<(ostream& out, const Infiniband::QueuePairTuple &qpt)
 {
-  return out << " lid=" << qpt.get_lid() << " qpn=" << qpt.get_qpn()
+  return out << "lid=" << qpt.get_lid() << " qpn=" << qpt.get_qpn()
              << " psn=" << qpt.get_psn() << " features=" << qpt.get_features()
              << " type=" << qpt.get_type() << " gseq=" << qpt.get_global_seq()
              << " cseq=" << qpt.get_connect_seq() << " mseq=" << qpt.get_msg_seq();

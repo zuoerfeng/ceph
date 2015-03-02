@@ -26,6 +26,9 @@ class InfRcWorker;
 class InfRcWorkerPool;
 class InfRcMessenger;
 
+#define INFRC_MSG_FIRST 1 << 1
+#define INFRC_MSG_CONTINUE 1 << 2
+
 class InfRcConnection : public Connection {
   // With 64 KB seglets 1 MB is fractured into 16 or 17 pieces, plus we
   // need an entry for the headers.
@@ -68,7 +71,6 @@ class InfRcConnection : public Connection {
     STATE_BEFORE_CONNECTING,
     STATE_CONNECTING_SENDING,
     STATE_CONNECTING,
-    STATE_CONNECTING_READY,
     STATE_OPEN,
     STATE_STANDBY,
     STATE_CLOSED,
@@ -80,7 +82,6 @@ class InfRcConnection : public Connection {
                                       "STATE_BEFORE_CONNECTING",
                                       "STATE_CONNECTING_SENDING",
                                       "STATE_CONNECTING",
-                                      "STATE_CONNECTING_READY",
                                       "STATE_OPEN",
                                       "STATE_STANDBY",
                                       "STATE_CLOSED",
@@ -93,6 +94,7 @@ class InfRcConnection : public Connection {
   EventCallbackRef reset_handler;
   EventCallbackRef remote_reset_handler;
   EventCallbackRef local_deliver_handler;
+  EventCallbackRef wakeup_handler;
 
   static int client_try_send_qp(int client_setup_socket, Infiniband::QueuePairTuple *outgoing_qpt,
                                 Infiniband::QueuePairTuple *incoming_qpt);
@@ -104,7 +106,7 @@ class InfRcConnection : public Connection {
   int randomize_out_seq();
   void discard_pending_queue_to(uint64_t seq);
   int send_zero_copy_msg(Message *m, Infiniband::BufferDescriptor *bd);
-  int send_zero_copy(bufferlist &bl, Infiniband::BufferDescriptor *bd, Message *m);
+  int send_zero_copy(bufferlist &bl, Infiniband::BufferDescriptor *bd, Message *m, const char tag);
   int _ready(Infiniband::QueuePairTuple &incoming_qpt,
              Infiniband::QueuePairTuple &outgoing_qpt);
   Infiniband::QueuePairTuple build_qp_tuple();
@@ -172,6 +174,7 @@ class InfRcConnection : public Connection {
     reset_handler.reset();
     remote_reset_handler.reset();
     local_deliver_handler.reset();
+    wakeup_handler.reset();
   }
   void process_request(bufferptr &bp);
   Infiniband::QueuePair* get_qp() {

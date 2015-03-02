@@ -26,6 +26,14 @@ class InfRcWorker;
 class InfRcWorkerPool;
 class InfRcMessenger;
 
+#define INFRC_UDP_MAGICCODE "deadbeaf"
+#define INFRC_UDP_RECONNECT 1 << 1
+
+struct InfRcUdpMsg {
+  char magic_code[8];
+  char tag;
+}__attribute__((packed));
+
 #define INFRC_MSG_FIRST 1 << 1
 #define INFRC_MSG_CONTINUE 1 << 2
 
@@ -34,6 +42,8 @@ class InfRcConnection : public Connection {
   // need an entry for the headers.
   enum { MAX_TX_SGE_COUNT = 24 };
   static const uint32_t MIN_ZERO_COPY_SGE = 500;
+  static const uint32_t STANDBY_RECONNECT_PERIOD_MS = 1000;
+  static const uint32_t STANDBY_RECONNECT_COUNT = 8;
 
   Infiniband::Infiniband *infiniband;
   Infiniband::QueuePair *qp;
@@ -46,13 +56,13 @@ class InfRcConnection : public Connection {
   uint32_t global_seq;
   uint32_t connect_seq;
   utime_t backoff;         // backoff time
-  utime_t last_connect;
+  utime_t last_wakeup;
   uint64_t out_seq, in_seq;
   int state;
   Messenger::Policy policy;
   int client_setup_socket; // UDP socket for outgoing setup requests
   uint32_t exchange_count;
-  Infiniband::QueuePairTuple peer_qpt;
+  uint32_t standby_reconnect_count;
   set<uint64_t> register_time_events; // need to delete it if stop
   list<Message*> pending_send;
   list<Message*> local_messages;      // local deliver
@@ -96,14 +106,14 @@ class InfRcConnection : public Connection {
   EventCallbackRef local_deliver_handler;
   EventCallbackRef wakeup_handler;
 
-  static int client_try_send_qp(int client_setup_socket, Infiniband::QueuePairTuple *outgoing_qpt,
-                                Infiniband::QueuePairTuple *incoming_qpt);
   void _stop();
   void _fault();
   void retry_send(Message *m);
   void handle_other_tag(Infiniband::QueuePairTuple &incoming_qpt);
   void was_session_reset();
   int randomize_out_seq();
+  int send_udp_packet(char *buf, size_t len);
+  int recv_udp_packet(char *buf, size_t len);
   void discard_pending_queue_to(uint64_t seq);
   int send_zero_copy_msg(Message *m, Infiniband::BufferDescriptor *bd);
   int send_zero_copy(bufferlist &bl, Infiniband::BufferDescriptor *bd, Message *m, const char tag);
@@ -147,7 +157,7 @@ class InfRcConnection : public Connection {
 
   bool is_connected() {
     Mutex::Locker l(cm_lock);
-    return state == STATE_OPEN || state == STATE_CONNECTING_READY;
+    return state == STATE_OPEN;
   }
 
   void connect();

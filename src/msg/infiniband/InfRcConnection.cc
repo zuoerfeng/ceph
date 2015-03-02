@@ -144,7 +144,7 @@ InfRcConnection::InfRcConnection(CephContext *c, InfRcMessenger *m, InfRcWorker 
   : Connection(c, m), infiniband(ib), qp(qp), worker(w), pool(p), center(&w->center),
     cm_lock("InfRcConnection::cm_lock"), global_seq(0), connect_seq(0),
     out_seq(0), in_seq(0), state(STATE_NEW), client_setup_socket(-1), exchange_count(0),
-    pending_msg(NULL), data_left(0), infrc_msgr(m)
+    standby_reconnect_count(0), pending_msg(NULL), data_left(0), infrc_msgr(m)
 {
   set_peer_type(type);
   set_peer_addr(addr);
@@ -246,23 +246,12 @@ void InfRcConnection::process()
           }
 
           ldout(infrc_msgr->cct, 20) << __func__ << " sending qpt=" << outgoing_qpt << dendl;
-          r = ::send(client_setup_socket, &outgoing_qpt, sizeof(outgoing_qpt), 0);
-          if (r != sizeof(outgoing_qpt)) {
-            if (r < 0) {
-              if (errno != EINTR && errno != EAGAIN) {
-                lderr(infrc_msgr->cct) << __func__ << " sendto returned error " << errno << ": "
-                                       << cpp_strerror(errno) << dendl;
-              }
-            } else {
-              lderr(infrc_msgr->cct) << __func__ << " sendto returned bad length (" << r
-                                     << ") " << dendl;
-            }
-          } else {
-            // Successfully sent
-            state = STATE_CONNECTING;
-            last_connect = ceph_clock_now(infrc_msgr->cct);
-            center->create_file_event(client_setup_socket, EVENT_READABLE, read_handler);
-          }
+          r = send_udp_packet((char*)&outgoing_qpt, sizeof(outgoing_qpt));
+          if (r < 0)
+            goto fail;
+          state = STATE_CONNECTING;
+          last_wakeup = ceph_clock_now(infrc_msgr->cct);
+          center->create_file_event(client_setup_socket, EVENT_READABLE, read_handler);
         } else {
           lderr(infrc_msgr->cct) << __func__ << " failed to exchange with server ("
                                  << get_peer_addr().addr << ") within sent request "
@@ -276,39 +265,24 @@ void InfRcConnection::process()
       case STATE_CONNECTING:
       {
         Infiniband::QueuePairTuple incoming_qpt;
-        ssize_t len = ::recv(client_setup_socket, &incoming_qpt,
-                             sizeof(incoming_qpt), 0);
-        // Drop incoming qpt
-        if (infrc_msgr->cct->_conf->ms_inject_socket_failures && client_setup_socket >= 0) {
-          if (rand() % infrc_msgr->cct->_conf->ms_inject_socket_failures == 0) {
-            ldout(infrc_msgr->cct, 0) << __func__ << " injecting socket failure" << dendl;
-            len = -1;
-          }
-        }
-        if (len == -1) {
-          if (errno == EINTR || errno == EAGAIN) {
-            utime_t diff = ceph_clock_now(infrc_msgr->cct) - last_connect;
-            if (diff.to_msec() >= infrc_msgr->cct->_conf->ms_infiniband_exchange_timeout_ms) {
-              ldout(infrc_msgr->cct, 1) << __func__ << " timeout since last connect=" << last_connect
-                                        << " retry connect" << dendl;
-            } else {
-              if (register_time_events.empty()) {
-                // avoid time precious problem and leak retry event
-                register_time_events.insert(center->create_time_event(
-                        diff.to_nsec()/1000 + 10000, EventCallbackRef(new C_infrc_wakeup(this))));
-                ldout(infrc_msgr->cct, 20) << __func__ << " still has " << diff.to_msec() << "ms"
-                                           << " recreate time event" << dendl;
-              }
-              break;
-            }
+        r = recv_udp_packet((char*)&incoming_qpt, sizeof(incoming_qpt));
+        if (r == 1) {
+          utime_t diff = ceph_clock_now(infrc_msgr->cct) - last_wakeup;
+          if (diff.to_msec() >= infrc_msgr->cct->_conf->ms_infiniband_exchange_timeout_ms) {
+            ldout(infrc_msgr->cct, 1) << __func__ << " timeout since last connect=" << last_wakeup
+                                      << " retry connect" << dendl;
           } else {
-            lderr(infrc_msgr->cct) << __func__ << " recv returned error " << errno << ": "
-                                   << cpp_strerror(errno) << dendl;
-            goto fail;
+            if (register_time_events.empty()) {
+              // avoid time precious problem and leak retry event
+              register_time_events.insert(center->create_time_event(
+                      diff.to_nsec()/1000 + 10000, wakeup_handler));
+              ldout(infrc_msgr->cct, 20) << __func__ << " still has " << diff.to_msec() << "ms"
+                                         << " recreate time event" << dendl;
+            }
+            break;
           }
-        } else if (len != sizeof(incoming_qpt)) {
-          lderr(infrc_msgr->cct) << __func__ << " recvfrom returned bad length (" << len
-                                 << ") while sending to: " << get_peer_addr() << dendl;
+        } else if (r < 0) {
+          goto fail;
         } else if (CEPH_MSGR_TAG_READY == incoming_qpt.get_tag()) {
           ldout(infrc_msgr->cct, 20) << __func__ << " state=" << get_state_name(state)
                                      << " receiving qpt=" << incoming_qpt << dendl;
@@ -341,13 +315,14 @@ void InfRcConnection::process()
               connect_seq++;
               assert(connect_seq == incoming_qpt.get_connect_seq());
               discard_pending_queue_to(incoming_qpt.get_msg_seq());
-              center->delete_file_event(client_setup_socket, EVENT_READABLE);
-              ::close(client_setup_socket);
-              client_setup_socket = -1;
               center->dispatch_event_external(
                   EventCallbackRef(new C_infrc_deliver_connect(infrc_msgr, this)));
               infrc_msgr->ms_deliver_handle_fast_connect(this);
               state = STATE_OPEN;
+              if (in_queue())
+                center->dispatch_event_external(write_handler);
+              ldout(infrc_msgr->cct, 10) << __func__ << " ready to send/redeive to "
+                                         << get_peer_addr() << dendl;
               break;
             }
           } else {
@@ -365,10 +340,53 @@ void InfRcConnection::process()
 
       case STATE_OPEN:
       {
-        ldout(infrc_msgr->cct, 10) << __func__ << " ready to send/redeive to "
-                                   << get_peer_addr() << dendl;
-        if (in_queue()) {
-          center->dispatch_event_external(write_handler);
+        InfRcUdpMsg udp_msg;
+        while (1) {
+          r = recv_udp_packet((char*)&udp_msg, sizeof(udp_msg));
+          if (r < 0) {
+            lderr(infrc_msgr->cct) << __func__ << " recv udp message met problem." << dendl;
+            goto fail;
+          } else if (r == 1) {
+            break;
+          } else {
+            if (memcmp(udp_msg.magic_code, INFRC_UDP_MAGICCODE, sizeof(udp_msg.magic_code))) {
+
+              lderr(infrc_msgr->cct) << __func__ << " bad magic code: " << udp_msg.magic_code << dendl;
+            } else if (udp_msg.tag == INFRC_UDP_RECONNECT) {
+              ldout(infrc_msgr->cct, 0) << __func__ << " got INFRC_UDP_RECONNECT, peer stuck into error state"
+                                       << ", reconnect" << dendl;
+              goto fail;
+            }
+          }
+        }
+
+        break;
+      }
+
+      case STATE_STANDBY:
+      {
+        if (policy.server && in_queue() && standby_reconnect_count <= STANDBY_RECONNECT_COUNT) {
+          ldout(infrc_msgr->cct, 0) << __func__ << " server, but exists message need to sent, try to make peer reconnect" << dendl;
+
+          utime_t diff = ceph_clock_now(infrc_msgr->cct) - last_wakeup;
+          if (diff.to_msec() < STANDBY_RECONNECT_PERIOD_MS / 2) {
+            if (register_time_events.empty()) {
+              register_time_events.insert(center->create_time_event(
+                      STANDBY_RECONNECT_PERIOD_MS*1000 / 2, wakeup_handler));
+              ldout(infrc_msgr->cct, 20) << __func__ << " wait " << STANDBY_RECONNECT_PERIOD_MS/2 << "ms" << dendl;
+            }
+          } else {
+            last_wakeup = ceph_clock_now(infrc_msgr->cct);
+            InfRcUdpMsg udp_msg;
+            memcpy(udp_msg.magic_code, INFRC_UDP_MAGICCODE, sizeof(udp_msg.magic_code));
+            udp_msg.tag = INFRC_UDP_RECONNECT;
+            r = send_udp_packet((char*)&udp_msg, sizeof(udp_msg));
+            if (r == 0 && register_time_events.empty()) {
+              register_time_events.insert(center->create_time_event(
+                      STANDBY_RECONNECT_PERIOD_MS*1000, wakeup_handler));
+              ldout(infrc_msgr->cct, 20) << __func__ << " wait " << STANDBY_RECONNECT_PERIOD_MS << "ms" << dendl;
+            }
+          }
         }
         break;
       }
@@ -384,6 +402,12 @@ void InfRcConnection::process()
       {
         ldout(infrc_msgr->cct, 20) << __func__ << " enter wait state" << dendl;
         break;
+      }
+
+      default:
+      {
+        lderr(infrc_msgr->cct) << __func__ << " unknown state=" << state << dendl;
+        assert(0);
       }
     }
     continue;
@@ -726,6 +750,12 @@ void InfRcConnection::_stop()
     return ;
   }
 
+  if (client_setup_socket >= 0) {
+    center->delete_file_event(client_setup_socket, EVENT_READABLE);
+    ::close(client_setup_socket);
+    client_setup_socket = -1;
+  }
+
   infrc_msgr->unregister_conn(this);
   state = STATE_CLOSED;
   if (qp) {
@@ -765,12 +795,6 @@ void InfRcConnection::_fault()
     return ;
   }
 
-  if (client_setup_socket >= 0) {
-    center->delete_file_event(client_setup_socket, EVENT_READABLE);
-    ::close(client_setup_socket);
-    client_setup_socket = -1;
-  }
-
   assert(qp);
   qp->to_reset();
   requeue_sent();
@@ -805,8 +829,7 @@ void InfRcConnection::_fault()
   }
 
   // woke up again;
-  register_time_events.insert(center->create_time_event(
-          backoff.to_nsec()/1000, EventCallbackRef(new C_infrc_wakeup(this))));
+  register_time_events.insert(center->create_time_event(backoff.to_nsec()/1000, wakeup_handler));
 }
 
 int InfRcConnection::randomize_out_seq()
@@ -823,6 +846,65 @@ int InfRcConnection::randomize_out_seq()
     out_seq = 0;
     return 0;
   }
+}
+
+int InfRcConnection::send_udp_packet(char *buf, size_t len)
+{
+  assert(client_setup_socket >= 0);
+  int retry = 0;
+  ssize_t r;
+ retry:
+  r = ::send(client_setup_socket, buf, len, 0);
+  // Drop incoming qpt
+  if (infrc_msgr->cct->_conf->ms_inject_socket_failures && client_setup_socket >= 0) {
+    if (rand() % infrc_msgr->cct->_conf->ms_inject_socket_failures == 0) {
+      ldout(infrc_msgr->cct, 0) << __func__ << " injecting socket failure" << dendl;
+      r = -1;
+    }
+  }
+
+  if ((size_t)r != len) {
+    if (r < 0 && (errno == EINTR || errno == EAGAIN) && retry < 3) {
+      retry++;
+      goto retry;
+    }
+    if (r < 0)
+      lderr(infrc_msgr->cct) << __func__ << " send returned error " << errno << ": "
+                             << cpp_strerror(errno) << dendl;
+    else
+      lderr(infrc_msgr->cct) << __func__ << " send got bad length (" << r << ") " << dendl;
+    return -1;
+  }
+  return 0;
+}
+
+// 1 means no valid buffer read, 0 means got enough buffer
+// else return < 0 means error
+int InfRcConnection::recv_udp_packet(char *buf, size_t len)
+{
+  assert(client_setup_socket >= 0);
+  ssize_t r = ::recv(client_setup_socket, buf, len, 0);
+  // Drop incoming qpt
+  if (infrc_msgr->cct->_conf->ms_inject_socket_failures && client_setup_socket >= 0) {
+    if (rand() % infrc_msgr->cct->_conf->ms_inject_socket_failures == 0) {
+      ldout(infrc_msgr->cct, 0) << __func__ << " injecting socket failure" << dendl;
+      r = -1;
+    }
+  }
+  if (r == -1) {
+    if (errno == EINTR || errno == EAGAIN) {
+      return 1;
+    } else {
+      lderr(infrc_msgr->cct) << __func__ << " recv got error " << errno << ": "
+                             << cpp_strerror(errno) << dendl;
+      return -1;
+    }
+  } else if ((size_t)r != len) {
+    lderr(infrc_msgr->cct) << __func__ << " recv got bad length (" << r
+                           << ") from: " << get_peer_addr() << dendl;
+    return 1;
+  }
+  return 0;
 }
 
 void InfRcConnection::discard_pending_queue_to(uint64_t seq)
@@ -874,13 +956,28 @@ int InfRcConnection::_ready(Infiniband::QueuePairTuple &incoming_qpt,
   ldout(infrc_msgr->cct, 10) << __func__ << " qpt=" << incoming_qpt << dendl;
   int r = qp->plumb(&incoming_qpt);
   if (r == 0) {
-    peer_qpt = incoming_qpt;
+    client_setup_socket = ::socket(PF_INET, SOCK_DGRAM, 0);
+    if (client_setup_socket == -1) {
+      lderr(infrc_msgr->cct) << __func__ << " failed to create client socket: "
+                             << strerror(errno) << dendl;
+      r = -1;
+    } else {
+      r = ::connect(client_setup_socket, (sockaddr*)(&get_peer_addr().addr),
+                    get_peer_addr().addr_size());
+      if (r < 0)
+        lderr(infrc_msgr->cct) << __func__ << " failed to connect " << get_peer_addr() << ": "
+                               << strerror(errno) << dendl;
+    }
+  }
+
+  if (r == 0) {
     center->dispatch_event_external(
         EventCallbackRef(new C_infrc_deliver_accept(infrc_msgr, this)));
     infrc_msgr->ms_deliver_handle_fast_accept(this);
     connect_seq = incoming_qpt.get_connect_seq() + 1;
     global_seq = incoming_qpt.get_global_seq();
     state = STATE_OPEN;
+    standby_reconnect_count = 0;
     outgoing_qpt = build_qp_tuple();
     if (in_queue())
       center->dispatch_event_external(write_handler);

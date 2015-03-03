@@ -111,7 +111,7 @@ class C_infrc_handle_accept : public EventCallback {
  public:
   C_infrc_handle_accept(InfRcMessenger *m): msgr(m) {}
   void do_request(int id) {
-    msgr->recv_connect();
+    msgr->recv_message();
   }
 };
 
@@ -146,6 +146,18 @@ class C_infrc_async_ev_handler : public EventCallback {
     worker->handle_async_event();
   }
 };
+
+static void get_infrc_msg(InfRcMsg &msg, const ceph_entity_addr &addr, const char tag,
+                          char *buf, size_t len)
+{
+  memset(&msg, 0, sizeof(msg));
+  msg.addr = addr;
+  memcpy(msg.magic_code, INFRC_MAGIC_CODE, sizeof(INFRC_MAGIC_CODE));
+  msg.tag = tag;
+  if (buf)
+    memcpy(&msg.payload, buf, len);
+}
+
 
 //------------------------------
 // InfRcWorker class
@@ -231,11 +243,15 @@ void *InfRcWorker::entry()
   while (!done) {
     ldout(cct, 20) << __func__ << " calling event process" << dendl;
 
-    int r = center.process_events(30000000);
+    int r = center.process_events(1000*1000*3);
     if (r < 0) {
-      ldout(cct, 20) << __func__ << " process events failed: "
-          << cpp_strerror(errno) << dendl;
+      ldout(cct, 20) << __func__ << " process events failed: " << cpp_strerror(errno) << dendl;
       // TODO do something?
+    } else if (r == 0) {
+      // idle
+      for (ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.begin();
+           it != qp_conns.end(); ++it)
+        it->second.second->send_keepalive();
     }
   }
 
@@ -1063,67 +1079,66 @@ int InfRcMessenger::_bind(const entity_addr_t& bind_addr, const set<int>& avoid_
  * \param events
  *      Indicates whether the socket was readable, writable, or both
  */
-void InfRcMessenger::recv_connect()
+void InfRcMessenger::recv_message()
 {
   ldout(cct, 20) << __func__ << dendl;
   while (1) {
-    entity_addr_t socket_addr;
-    socklen_t slen = sizeof(socket_addr.ss_addr());
-    Infiniband::QueuePairTuple incoming_qpt, outgoing_qpt;
-    ssize_t len = ::recvfrom(server_setup_socket, &incoming_qpt,
-                             sizeof(incoming_qpt), 0,
-                             reinterpret_cast<sockaddr *>(&socket_addr.ss_addr()), &slen);
-
-    // Recv wrong qpt
-    if (cct->_conf->ms_inject_socket_failures) {
-      if (rand() % cct->_conf->ms_inject_socket_failures == 0) {
-        ldout(cct, 0) << __func__ << " injecting socket failure" << dendl;
-        len = 1;
-      }
-    }
-
-    if (len <= -1) {
-      if (errno != EAGAIN)
-        lderr(cct) << __func__ << " recvfrom failed: " << cpp_strerror(errno) << dendl;
+    InfRcMsg msg;
+    entity_addr_t addr;
+    int r = recv_udp_msg(server_setup_socket, msg, INFRC_UDP_BOOT|INFRC_UDP_PING, &addr);
+    if (r < 0) {
+      ldout(cct, 0) << __func__ << " recv msg failed." << dendl;
       break;
-    } else if (len != sizeof(incoming_qpt)) {
-      lderr(cct) << __func__ << " recvfrom got a strange incoming size="
-                 << len << dendl;
-      continue;
+    } else if (r > 0) {
+      break;
     }
-    ldout(cct, 20) << __func__ << " receiving new connection qpt="
-                   << incoming_qpt << dendl;
-    if (incoming_qpt.get_sender_addr().is_blank_ip()) {
-      // peer apparently doesn't know what ip they have; figure it out for them.
-      entity_addr_t peer_addr = incoming_qpt.get_sender_addr();
-      int port = peer_addr.get_port();
-      peer_addr.addr = socket_addr.addr;
-      peer_addr.set_port(port);
-      incoming_qpt.set_sender_addr(peer_addr);
-      ldout(cct, 10) << __func__ << " accept peer addr is really " << peer_addr << dendl;
+    if (msg.tag == INFRC_UDP_BOOT) {
+      Infiniband::QueuePairTuple qpt;
+      memcpy(&qpt, &msg.payload.boot.qpt, sizeof(msg.payload.boot.qpt));
+      accept(qpt, addr);
+    } else if (msg.tag == INFRC_UDP_PING) {
+      handle_ping(entity_addr_t(msg.addr));
     }
-    incoming_qpt.set_features(ceph_sanitize_features(incoming_qpt.get_features()));
-    uint64_t required = get_policy(incoming_qpt.get_type()).features_required;
-    uint64_t feat_missing = required & ~(uint64_t)incoming_qpt.get_features();
-    if (feat_missing) {
-      outgoing_qpt.set_tag(CEPH_MSGR_TAG_FEATURES);
-      outgoing_qpt.set_features(required);
-      ldout(cct, 1) << __func__ << " peer missing required features "
-                                << std::hex << feat_missing << std::dec << dendl;
-      len = ::sendto(server_setup_socket, &outgoing_qpt, sizeof(outgoing_qpt), 0,
-                     reinterpret_cast<sockaddr *>(&socket_addr.ss_addr()), slen);
-      if (len != sizeof(outgoing_qpt)) {
-        lderr(cct) << __func__ << " sendto failed, len = " << len << ": "
-                   << cpp_strerror(errno) << dendl;
-      }
-      continue;
-    }
+  }
+}
 
+/**
+ * This method is invoked by the dispatcher when #server_setup_socket becomes
+ * readable. It attempts to set up QueuePair with a connecting remote
+ * client.
+ *
+ * \param events
+ *      Indicates whether the socket was readable, writable, or both
+ */
+void InfRcMessenger::accept(Infiniband::QueuePairTuple &incoming_qpt, entity_addr_t &socket_addr)
+{
+  ldout(cct, 20) << __func__ << dendl;
+  Infiniband::QueuePairTuple outgoing_qpt;
+
+  ldout(cct, 20) << __func__ << " receiving new connection request qpt=" << incoming_qpt << dendl;
+  if (incoming_qpt.get_sender_addr().is_blank_ip()) {
+    // peer apparently doesn't know what ip they have; figure it out for them.
+    entity_addr_t peer_addr = incoming_qpt.get_sender_addr();
+    int port = peer_addr.get_port();
+    peer_addr.addr = socket_addr.addr;
+    peer_addr.set_port(port);
+    incoming_qpt.set_sender_addr(peer_addr);
+    ldout(cct, 10) << __func__ << " accept peer addr is really " << peer_addr << dendl;
+  }
+  incoming_qpt.set_features(ceph_sanitize_features(incoming_qpt.get_features()));
+  uint64_t required = get_policy(incoming_qpt.get_type()).features_required;
+  uint64_t feat_missing = required & ~(uint64_t)incoming_qpt.get_features();
+  if (feat_missing) {
+    outgoing_qpt.set_tag(CEPH_MSGR_TAG_FEATURES);
+    outgoing_qpt.set_features(required);
+    ldout(cct, 1) << __func__ << " peer missing required features "
+                              << std::hex << feat_missing << std::dec << dendl;
+  } else {
     Mutex::Locker l(lock);
     InfRcConnectionRef conn = _lookup_conn(incoming_qpt.get_sender_addr());
     if (conn) {
       if (!conn->replace(incoming_qpt, outgoing_qpt))
-        continue;
+        return;
     } else if (incoming_qpt.get_connect_seq() > 0) {
       // we reset, and they are opening a new session
       ldout(cct, 0) << __func__ << " accept we reset (peer sent cseq "
@@ -1148,30 +1163,28 @@ void InfRcMessenger::recv_connect()
       connections[incoming_qpt.get_sender_addr()] = conn;
       if (conn->ready(incoming_qpt, outgoing_qpt) < 0) {
         lderr(cct) << __func__ << " ready failed: " << cpp_strerror(errno) << dendl;
-        continue;
+        return;
       }
-    }
-
-    // Send wrong qpt
-    if (cct->_conf->ms_inject_socket_failures) {
-      if (rand() % cct->_conf->ms_inject_socket_failures == 0) {
-        ldout(cct, 0) << __func__ << " injecting socket failure" << dendl;
-        memset(&outgoing_qpt, sizeof(outgoing_qpt), 1);
-      }
-    }
-
-    ldout(cct, 20) << __func__ << " sending qpt=" << outgoing_qpt << dendl;
-    len = ::sendto(server_setup_socket, &outgoing_qpt,
-                   sizeof(outgoing_qpt), 0,
-                   reinterpret_cast<sockaddr *>(&socket_addr.ss_addr()), slen);
-    if (len != sizeof(outgoing_qpt)) {
-      lderr(cct) << __func__ << " sendto failed, len = " << len << ": "
-                 << cpp_strerror(errno) << dendl;
-      // FIXME To do something?
     }
   }
+  if (send_udp_msg(server_setup_socket, INFRC_UDP_BOOT_ACK,
+                   (char*)&outgoing_qpt, sizeof(outgoing_qpt), socket_addr,
+                   get_myaddr()) < 0)
+    lderr(cct) << __func__ << " sendto peer boot message failed." << dendl; // FIXME To do something?
+  else
+    ldout(cct, 20) << __func__ << " sending qpt=" << outgoing_qpt << dendl;
 }
 
+void InfRcMessenger::handle_ping(entity_addr_t addr)
+{
+  Mutex::Locker l(lock);
+  InfRcConnectionRef conn = _lookup_conn(addr);
+  if (conn) {
+    ldout(cct, 10) << __func__ << " got con ping message" << conn << dendl;
+    if (send_udp_msg(server_setup_socket, INFRC_UDP_PONG, NULL, 0, addr, get_myaddr()) < 0)
+      ldout(cct, 0) << __func__ << " send pong message failed" << dendl;
+  }
+}
 
 void InfRcMessenger::learned_addr(const entity_addr_t &peer_addr_for_me)
 {
@@ -1193,4 +1206,80 @@ void InfRcMessenger::learned_addr(const entity_addr_t &peer_addr_for_me)
     _init_local_connection();
   }
   lock.Unlock();
+}
+
+// 1 means no valid buffer read, 0 means got enough buffer
+// else return < 0 means error
+int InfRcMessenger::recv_udp_msg(int sd, InfRcMsg &msg, uint8_t extag, entity_addr_t *addr)
+{
+  assert(sd >= 0);
+  ssize_t r;
+  entity_addr_t socket_addr;
+  socklen_t slen = sizeof(socket_addr.ss_addr());
+  r = ::recvfrom(sd, &msg, sizeof(msg), 0,
+                 reinterpret_cast<sockaddr *>(&socket_addr.ss_addr()), &slen);
+  // Drop incoming qpt
+  if (cct->_conf->ms_inject_socket_failures && sd >= 0) {
+    if (rand() % cct->_conf->ms_inject_socket_failures == 0) {
+      ldout(cct, 0) << __func__ << " injecting socket failure" << dendl;
+      r = -1;
+    }
+  }
+  if (r == -1) {
+    if (errno == EINTR || errno == EAGAIN) {
+      return 1;
+    } else {
+      lderr(cct) << __func__ << " recv got error " << errno << ": "
+                             << cpp_strerror(errno) << dendl;
+      return -1;
+    }
+  } else if ((size_t)r != sizeof(msg)) { // valid message length
+    lderr(cct) << __func__ << " recv got bad length (" << r << ")." << dendl;
+    return 1;
+  } else if (memcmp(msg.magic_code, INFRC_MAGIC_CODE, sizeof(msg.magic_code))) { // valid magic code
+    ldout(cct, 0) << __func__ << " wrong magic code: " << msg.magic_code << dendl;
+    return 1;
+  } else if (extag && !(msg.tag & extag)) { // valid tag
+    ldout(cct, 0) << __func__ << " wrong tag: " << msg.tag << dendl;
+    return 1;
+  } else { // valid message
+    if (addr)
+      *addr = socket_addr;
+    ldout(cct, 0) << __func__ << " get valid udp message(" << msg.tag << ")" << dendl;
+    return 0;
+  }
+}
+
+int InfRcMessenger::send_udp_msg(int sd, const char tag, char *buf, size_t len, entity_addr_t &peeraddr, const entity_addr_t &myaddr)
+{
+  assert(sd >= 0);
+  int retry = 0;
+  ssize_t r;
+  InfRcMsg msg;
+  get_infrc_msg(msg, myaddr, tag, buf, len);
+
+ retry:
+  r = ::sendto(sd, (char*)&msg, sizeof(msg), 0, reinterpret_cast<sockaddr *>(&peeraddr.ss_addr()),
+               sizeof(peeraddr.ss_addr()));
+  // Drop incoming qpt
+  if (cct->_conf->ms_inject_socket_failures && sd >= 0) {
+    if (rand() % cct->_conf->ms_inject_socket_failures == 0) {
+      ldout(cct, 0) << __func__ << " injecting socket failure" << dendl;
+      r = -1;
+    }
+  }
+
+  if ((size_t)r != sizeof(msg)) {
+    if (r < 0 && (errno == EINTR || errno == EAGAIN) && retry < 3) {
+      retry++;
+      goto retry;
+    }
+    if (r < 0)
+      lderr(cct) << __func__ << " send returned error " << errno << ": "
+                             << cpp_strerror(errno) << dendl;
+    else
+      lderr(cct) << __func__ << " send got bad length (" << r << ") " << dendl;
+    return -1;
+  }
+  return 0;
 }

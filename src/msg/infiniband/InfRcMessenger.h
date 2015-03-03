@@ -506,7 +506,11 @@ class InfRcMessenger : public SimplePolicyMessenger {
     deleted_conns.insert(conn);
   }
 
-  void recv_connect();
+  void accept(Infiniband::QueuePairTuple &incoming_qpt, entity_addr_t &socket_addr);
+  void handle_ping(entity_addr_t addr);
+  void recv_message();
+  int recv_udp_msg(int sd, InfRcMsg &msg, uint8_t extag, entity_addr_t *addr=NULL);
+  int send_udp_msg(int sd, const char tag, char *buf, size_t len, entity_addr_t &peer_ddr, const entity_addr_t &myaddr);
   /**
    * @} // InfRcMessenger Internals
    */

@@ -144,7 +144,7 @@ InfRcConnection::InfRcConnection(CephContext *c, InfRcMessenger *m, InfRcWorker 
   : Connection(c, m), infiniband(ib), qp(qp), worker(w), pool(p), center(&w->center),
     cm_lock("InfRcConnection::cm_lock"), global_seq(0), connect_seq(0),
     out_seq(0), in_seq(0), state(STATE_NEW), client_setup_socket(-1), exchange_count(0),
-    standby_reconnect_count(0), pending_msg(NULL), data_left(0), infrc_msgr(m)
+    keepalive_retry(0), pending_msg(NULL), data_left(0), infrc_msgr(m)
 {
   set_peer_type(type);
   set_peer_addr(addr);
@@ -168,12 +168,42 @@ InfRcConnection::~InfRcConnection()
 
 void InfRcConnection::connect()
 {
-  ldout(infrc_msgr->cct, 10) << __func__ << dendl;
+  ldout(infrc_msgr->cct, 20) << __func__ << dendl;
 
   state = STATE_BEFORE_CONNECTING;
   // rescheduler connection in order to avoid lock dep
   // may called by external thread(send_message)
   center->dispatch_event_external(read_handler);
+}
+
+void InfRcConnection::send_keepalive()
+{
+  if (client_setup_socket < 0 || !is_connected())
+    return ;
+
+  ldout(infrc_msgr->cct, 20) << __func__ << dendl;
+  utime_t now = ceph_clock_now(infrc_msgr->cct);
+  if (!sent_queue.empty() || in_queue() || now - last_ping < KEEPALIVE_MIN_PREIOD_MS) {
+    ldout(infrc_msgr->cct, 10) << __func__ << " connection has job or just sent before, no need to detect alive" << dendl;
+    return ;
+  }
+
+  int r = infrc_msgr->send_udp_msg(client_setup_socket, INFRC_UDP_PING, NULL, 0, peer_addr,
+                                   infrc_msgr->get_myaddr());
+  keepalive_retry++;
+  last_ping = now;
+  if (r < 0) {
+    ldout(infrc_msgr->cct, 5) << __func__ << " failed to send keepalive, retry later." << dendl;
+  } else {
+    ldout(infrc_msgr->cct, 10) << __func__ << " successfully to send keepalive." << dendl;
+  }
+  utime_t diff = now - last_pong;
+  if (keepalive_retry <= KEEPALIVE_RETRY_COUNT || diff.to_msec() > KEEPALIVE_TIMEOUT_MS) {
+    ldout(infrc_msgr->cct, 0) << __func__ << " failed to send keepalive, reach max limit("
+                              << KEEPALIVE_RETRY_COUNT << ")=" << keepalive_retry << " or timeout("
+                              << KEEPALIVE_TIMEOUT_MS << ")=" << diff.to_msec() << "ms."<< dendl;
+    fault();
+  }
 }
 
 void InfRcConnection::process()
@@ -202,10 +232,10 @@ void InfRcConnection::process()
           goto fail;
         }
 
-        r = ::connect(client_setup_socket, (sockaddr*)(&get_peer_addr().addr),
-                      get_peer_addr().addr_size());
+        r = ::connect(client_setup_socket, (sockaddr*)(&peer_addr.addr),
+                      peer_addr.addr_size());
         if (r < 0) {
-          lderr(infrc_msgr->cct) << __func__ << " failed to connect " << get_peer_addr() << ": "
+          lderr(infrc_msgr->cct) << __func__ << " failed to connect " << peer_addr << ": "
                      << strerror(errno) << dendl;
           goto fail;
         }
@@ -235,7 +265,7 @@ void InfRcConnection::process()
               static_cast<uint16_t>(worker->get_lid()),
               qp->get_local_qp_number(), qp->get_initial_psn(),
               policy.features_supported, 0, infrc_msgr->get_myinst().name.type(),
-              global_seq, connect_seq, in_seq, infrc_msgr->get_myaddr(), get_peer_addr());
+              global_seq, connect_seq, in_seq, infrc_msgr->get_myaddr(), peer_addr);
 
           // Send wrong qpt
           if (infrc_msgr->cct->_conf->ms_inject_socket_failures && client_setup_socket >= 0) {
@@ -246,7 +276,8 @@ void InfRcConnection::process()
           }
 
           ldout(infrc_msgr->cct, 20) << __func__ << " sending qpt=" << outgoing_qpt << dendl;
-          r = send_udp_packet((char*)&outgoing_qpt, sizeof(outgoing_qpt));
+          r = infrc_msgr->send_udp_msg(client_setup_socket, INFRC_UDP_BOOT, (char*)&outgoing_qpt,
+                                       sizeof(outgoing_qpt), peer_addr, infrc_msgr->get_myaddr());
           if (r < 0)
             goto fail;
           state = STATE_CONNECTING;
@@ -254,7 +285,7 @@ void InfRcConnection::process()
           center->create_file_event(client_setup_socket, EVENT_READABLE, read_handler);
         } else {
           lderr(infrc_msgr->cct) << __func__ << " failed to exchange with server ("
-                                 << get_peer_addr().addr << ") within sent request "
+                                 << peer_addr.addr << ") within sent request "
                                  << infrc_msgr->cct->_conf->ms_infiniband_exchange_max_timeouts
                                  << " times" << dendl;
           goto fail;
@@ -265,8 +296,9 @@ void InfRcConnection::process()
       case STATE_CONNECTING:
       {
         Infiniband::QueuePairTuple incoming_qpt;
-        r = recv_udp_packet((char*)&incoming_qpt, sizeof(incoming_qpt));
-        if (r == 1) {
+        InfRcMsg msg;
+        r = infrc_msgr->recv_udp_msg(client_setup_socket, msg, INFRC_UDP_BOOT_ACK);
+        if (r > 0) {
           utime_t diff = ceph_clock_now(infrc_msgr->cct) - last_wakeup;
           if (diff.to_msec() >= infrc_msgr->cct->_conf->ms_infiniband_exchange_timeout_ms) {
             ldout(infrc_msgr->cct, 1) << __func__ << " timeout since last connect=" << last_wakeup
@@ -283,55 +315,59 @@ void InfRcConnection::process()
           }
         } else if (r < 0) {
           goto fail;
-        } else if (CEPH_MSGR_TAG_READY == incoming_qpt.get_tag()) {
-          ldout(infrc_msgr->cct, 20) << __func__ << " state=" << get_state_name(state)
-                                     << " receiving qpt=" << incoming_qpt << dendl;
-          if (global_seq == incoming_qpt.get_global_seq()) {
-            // plumb up our queue pair with the server's parameters.
-            r = qp->plumb(&incoming_qpt);
-            if (r == 0) {
-              cm_lock.Unlock();
-              infrc_msgr->learned_addr(incoming_qpt.get_receiver_addr());
-              if (infrc_msgr->cct->_conf->ms_inject_internal_delays) {
-                ldout(infrc_msgr->cct, 10) << __func__ << " sleep for " << infrc_msgr->cct->_conf->ms_inject_internal_delays << dendl;
-                utime_t t;
-                t.set_from_double(infrc_msgr->cct->_conf->ms_inject_internal_delays);
-                t.sleep();
-              }
-              if (infrc_msgr->accept_conn(this)) {
+        } else if (msg.tag == INFRC_UDP_BOOT_ACK) {
+          memcpy(&incoming_qpt, &msg.payload.boot.qpt, sizeof(msg.payload.boot.qpt));
+          if (CEPH_MSGR_TAG_READY == incoming_qpt.get_tag()) {
+            ldout(infrc_msgr->cct, 20) << __func__ << " state=" << get_state_name(state)
+                                       << " receiving qpt=" << incoming_qpt << dendl;
+            if (global_seq == incoming_qpt.get_global_seq()) {
+              // plumb up our queue pair with the server's parameters.
+              r = qp->plumb(&incoming_qpt);
+              if (r == 0) {
+                cm_lock.Unlock();
+                infrc_msgr->learned_addr(incoming_qpt.get_receiver_addr());
+                if (infrc_msgr->cct->_conf->ms_inject_internal_delays) {
+                  ldout(infrc_msgr->cct, 10) << __func__ << " sleep for " << infrc_msgr->cct->_conf->ms_inject_internal_delays << dendl;
+                  utime_t t;
+                  t.set_from_double(infrc_msgr->cct->_conf->ms_inject_internal_delays);
+                  t.sleep();
+                }
+                if (infrc_msgr->accept_conn(this)) {
+                  cm_lock.Lock();
+                  lderr(infrc_msgr->cct) << __func__ << " accept conn(" << incoming_qpt.get_receiver_addr()
+                                         << ") racing, mark me down" << dendl;
+                  _stop();
+                  break;
+                }
                 cm_lock.Lock();
-                lderr(infrc_msgr->cct) << __func__ << " accept conn("
-                                       << incoming_qpt.get_receiver_addr()
-                                       << ") racing, mark me down" << dendl;
-                _stop();
+                if (state != STATE_CONNECTING) {
+                  ldout(infrc_msgr->cct, 1) << __func__ << " conn is already down " << dendl;
+                  assert(state == STATE_CLOSED);
+                  goto fail;
+                }
+                connect_seq++;
+                assert(connect_seq == incoming_qpt.get_connect_seq());
+                discard_pending_queue_to(incoming_qpt.get_msg_seq());
+                center->dispatch_event_external(
+                    EventCallbackRef(new C_infrc_deliver_connect(infrc_msgr, this)));
+                infrc_msgr->ms_deliver_handle_fast_connect(this);
+                state = STATE_OPEN;
+                if (in_queue())
+                  center->dispatch_event_external(write_handler);
+                ldout(infrc_msgr->cct, 10) << __func__ << " ready to send/redeive to "
+                                           << peer_addr << dendl;
                 break;
               }
-              cm_lock.Lock();
-              if (state != STATE_CONNECTING) {
-                ldout(infrc_msgr->cct, 1) << __func__ << " conn is already down " << dendl;
-                assert(state == STATE_CLOSED);
-                goto fail;
-              }
-              connect_seq++;
-              assert(connect_seq == incoming_qpt.get_connect_seq());
-              discard_pending_queue_to(incoming_qpt.get_msg_seq());
-              center->dispatch_event_external(
-                  EventCallbackRef(new C_infrc_deliver_connect(infrc_msgr, this)));
-              infrc_msgr->ms_deliver_handle_fast_connect(this);
-              state = STATE_OPEN;
-              if (in_queue())
-                center->dispatch_event_external(write_handler);
-              ldout(infrc_msgr->cct, 10) << __func__ << " ready to send/redeive to "
-                                         << get_peer_addr() << dendl;
-              break;
+            } else {
+              lderr(infrc_msgr->cct) << __func__ << " received global_seq doesn't match "
+                                     << global_seq << " != " << incoming_qpt.get_global_seq() << dendl;
             }
           } else {
-            lderr(infrc_msgr->cct) << __func__ << " received global_seq doesn't match "
-                                   << global_seq << " != " << incoming_qpt.get_global_seq() << dendl;
+            handle_other_tag(incoming_qpt);
+            break;
           }
         } else {
-          handle_other_tag(incoming_qpt);
-          break;
+          ldout(infrc_msgr->cct, 0) << __func__ << " unexpected message tag=" << msg.tag << dendl;
         }
 
         state = STATE_CONNECTING_SENDING;
@@ -340,24 +376,14 @@ void InfRcConnection::process()
 
       case STATE_OPEN:
       {
-        InfRcUdpMsg udp_msg;
-        while (1) {
-          r = recv_udp_packet((char*)&udp_msg, sizeof(udp_msg));
-          if (r < 0) {
-            lderr(infrc_msgr->cct) << __func__ << " recv udp message met problem." << dendl;
-            goto fail;
-          } else if (r == 1) {
+        ldout(infrc_msgr->cct, 20) << __func__ << " enter open state" << dendl;
+        InfRcMsg msg;
+        while (client_setup_socket >= 0) {
+          int r = infrc_msgr->recv_udp_msg(client_setup_socket, msg, INFRC_UDP_PONG);
+          if (r != 0)
             break;
-          } else {
-            if (memcmp(udp_msg.magic_code, INFRC_UDP_MAGICCODE, sizeof(udp_msg.magic_code))) {
-
-              lderr(infrc_msgr->cct) << __func__ << " bad magic code: " << udp_msg.magic_code << dendl;
-            } else if (udp_msg.tag == INFRC_UDP_RECONNECT) {
-              ldout(infrc_msgr->cct, 0) << __func__ << " got INFRC_UDP_RECONNECT, peer stuck into error state"
-                                       << ", reconnect" << dendl;
-              goto fail;
-            }
-          }
+          if (msg.tag == INFRC_UDP_PONG)
+            handle_pong(msg.addr);
         }
 
         break;
@@ -365,36 +391,14 @@ void InfRcConnection::process()
 
       case STATE_STANDBY:
       {
-        if (policy.server && in_queue() && standby_reconnect_count <= STANDBY_RECONNECT_COUNT) {
-          ldout(infrc_msgr->cct, 0) << __func__ << " server, but exists message need to sent, try to make peer reconnect" << dendl;
-
-          utime_t diff = ceph_clock_now(infrc_msgr->cct) - last_wakeup;
-          if (diff.to_msec() < STANDBY_RECONNECT_PERIOD_MS / 2) {
-            if (register_time_events.empty()) {
-              register_time_events.insert(center->create_time_event(
-                      STANDBY_RECONNECT_PERIOD_MS*1000 / 2, wakeup_handler));
-              ldout(infrc_msgr->cct, 20) << __func__ << " wait " << STANDBY_RECONNECT_PERIOD_MS/2 << "ms" << dendl;
-            }
-          } else {
-            last_wakeup = ceph_clock_now(infrc_msgr->cct);
-            InfRcUdpMsg udp_msg;
-            memcpy(udp_msg.magic_code, INFRC_UDP_MAGICCODE, sizeof(udp_msg.magic_code));
-            udp_msg.tag = INFRC_UDP_RECONNECT;
-            r = send_udp_packet((char*)&udp_msg, sizeof(udp_msg));
-            if (r == 0 && register_time_events.empty()) {
-              register_time_events.insert(center->create_time_event(
-                      STANDBY_RECONNECT_PERIOD_MS*1000, wakeup_handler));
-              ldout(infrc_msgr->cct, 20) << __func__ << " wait " << STANDBY_RECONNECT_PERIOD_MS << "ms" << dendl;
-            }
-          }
-        }
+        ldout(infrc_msgr->cct, 20) << __func__ << " enter standby state" << dendl;
         break;
       }
 
       case STATE_CLOSED:
       {
         ldout(infrc_msgr->cct, 10) << __func__ << " already closed "
-                                   << get_peer_addr() << dendl;
+                                   << peer_addr << dendl;
         break;
       }
 
@@ -428,7 +432,7 @@ void InfRcConnection::handle_other_tag(Infiniband::QueuePairTuple &incoming_qpt)
                                 << incoming_qpt.get_features() << " missing "
                                 << (incoming_qpt.get_features() & ~policy.features_supported)
                                 << std::dec << dendl;
-      _fault();
+      _stop();
       break;
 
     case CEPH_MSGR_TAG_RETRY_GLOBAL:
@@ -505,7 +509,7 @@ int InfRcConnection::send_message(Message *m)
     ldout(infrc_msgr->cct, 1) << __func__ << " connection already stopped: " << *m << dendl;
     m->put();
     return -1;
-  } else if (infrc_msgr->get_myaddr() == get_peer_addr()) {
+  } else if (infrc_msgr->get_myaddr() == peer_addr) {
     ldout(infrc_msgr->cct, 20) << __func__ << " local dispatch " << *m << dendl;
     local_messages.push_back(m);
     center->dispatch_event_external(local_deliver_handler);
@@ -848,65 +852,6 @@ int InfRcConnection::randomize_out_seq()
   }
 }
 
-int InfRcConnection::send_udp_packet(char *buf, size_t len)
-{
-  assert(client_setup_socket >= 0);
-  int retry = 0;
-  ssize_t r;
- retry:
-  r = ::send(client_setup_socket, buf, len, 0);
-  // Drop incoming qpt
-  if (infrc_msgr->cct->_conf->ms_inject_socket_failures && client_setup_socket >= 0) {
-    if (rand() % infrc_msgr->cct->_conf->ms_inject_socket_failures == 0) {
-      ldout(infrc_msgr->cct, 0) << __func__ << " injecting socket failure" << dendl;
-      r = -1;
-    }
-  }
-
-  if ((size_t)r != len) {
-    if (r < 0 && (errno == EINTR || errno == EAGAIN) && retry < 3) {
-      retry++;
-      goto retry;
-    }
-    if (r < 0)
-      lderr(infrc_msgr->cct) << __func__ << " send returned error " << errno << ": "
-                             << cpp_strerror(errno) << dendl;
-    else
-      lderr(infrc_msgr->cct) << __func__ << " send got bad length (" << r << ") " << dendl;
-    return -1;
-  }
-  return 0;
-}
-
-// 1 means no valid buffer read, 0 means got enough buffer
-// else return < 0 means error
-int InfRcConnection::recv_udp_packet(char *buf, size_t len)
-{
-  assert(client_setup_socket >= 0);
-  ssize_t r = ::recv(client_setup_socket, buf, len, 0);
-  // Drop incoming qpt
-  if (infrc_msgr->cct->_conf->ms_inject_socket_failures && client_setup_socket >= 0) {
-    if (rand() % infrc_msgr->cct->_conf->ms_inject_socket_failures == 0) {
-      ldout(infrc_msgr->cct, 0) << __func__ << " injecting socket failure" << dendl;
-      r = -1;
-    }
-  }
-  if (r == -1) {
-    if (errno == EINTR || errno == EAGAIN) {
-      return 1;
-    } else {
-      lderr(infrc_msgr->cct) << __func__ << " recv got error " << errno << ": "
-                             << cpp_strerror(errno) << dendl;
-      return -1;
-    }
-  } else if ((size_t)r != len) {
-    lderr(infrc_msgr->cct) << __func__ << " recv got bad length (" << r
-                           << ") from: " << get_peer_addr() << dendl;
-    return 1;
-  }
-  return 0;
-}
-
 void InfRcConnection::discard_pending_queue_to(uint64_t seq)
 {
   ldout(infrc_msgr->cct, 20) << __func__ << " current out_seq=" << out_seq
@@ -956,28 +901,12 @@ int InfRcConnection::_ready(Infiniband::QueuePairTuple &incoming_qpt,
   ldout(infrc_msgr->cct, 10) << __func__ << " qpt=" << incoming_qpt << dendl;
   int r = qp->plumb(&incoming_qpt);
   if (r == 0) {
-    client_setup_socket = ::socket(PF_INET, SOCK_DGRAM, 0);
-    if (client_setup_socket == -1) {
-      lderr(infrc_msgr->cct) << __func__ << " failed to create client socket: "
-                             << strerror(errno) << dendl;
-      r = -1;
-    } else {
-      r = ::connect(client_setup_socket, (sockaddr*)(&get_peer_addr().addr),
-                    get_peer_addr().addr_size());
-      if (r < 0)
-        lderr(infrc_msgr->cct) << __func__ << " failed to connect " << get_peer_addr() << ": "
-                               << strerror(errno) << dendl;
-    }
-  }
-
-  if (r == 0) {
     center->dispatch_event_external(
         EventCallbackRef(new C_infrc_deliver_accept(infrc_msgr, this)));
     infrc_msgr->ms_deliver_handle_fast_accept(this);
     connect_seq = incoming_qpt.get_connect_seq() + 1;
     global_seq = incoming_qpt.get_global_seq();
     state = STATE_OPEN;
-    standby_reconnect_count = 0;
     outgoing_qpt = build_qp_tuple();
     if (in_queue())
       center->dispatch_event_external(write_handler);
@@ -1014,7 +943,7 @@ Infiniband::QueuePairTuple InfRcConnection::build_qp_tuple()
                                policy.features_supported, CEPH_MSGR_TAG_READY,
                                infrc_msgr->get_myinst().name.type(),
                                global_seq, connect_seq, in_seq,
-                               infrc_msgr->get_myaddr(), get_peer_addr());
+                               infrc_msgr->get_myaddr(), peer_addr);
   return t;
 }
 
@@ -1116,6 +1045,12 @@ void InfRcConnection::process_request(bufferptr &bp)
 void InfRcConnection::ack_message(ibv_wc &wc, Infiniband::BufferDescriptor *bd)
 {
   Mutex::Locker l(cm_lock);
+  if (state != STATE_OPEN) {
+    ldout(infrc_msgr->cct, 0) << __func__ << " current state is " << get_state_name(state) << ", discard ack bd="
+                              << bd << dendl;
+    return ;
+  }
+
   if (wc.status != IBV_WC_SUCCESS) {
     if (wc.status == IBV_WC_RETRY_EXC_ERR) {
       lderr(infrc_msgr->cct) << __func__ << " connection between server and client not working. Disconnect this now" << dendl;
@@ -1159,7 +1094,7 @@ bool InfRcConnection::replace(Infiniband::QueuePairTuple &incoming_qpt,
 
   Mutex::Locker l(cm_lock);
   if (global_seq >= incoming_qpt.get_global_seq()) {
-    ldout(infrc_msgr->cct, 1) << __func__ << " receive older global seq=" << outgoing_qpt.get_global_seq()
+    ldout(infrc_msgr->cct, 1) << __func__ << " receive older global seq=" << incoming_qpt.get_global_seq()
                               << " existing seq=" << global_seq << ", let peer retry." << dendl;
     outgoing_qpt.set_tag(CEPH_MSGR_TAG_RETRY_GLOBAL);
     outgoing_qpt.set_global_seq(global_seq);
@@ -1224,8 +1159,6 @@ bool InfRcConnection::replace(Infiniband::QueuePairTuple &incoming_qpt,
                                 << this << ".cseq " << connect_seq
                                 << " == " << connect_seq << ", sending WAIT" << dendl;
       assert(peer_addr > infrc_msgr->get_myaddr());
-      // make sure our outgoing connection will follow through
-      send_keepalive();
       outgoing_qpt.set_tag(CEPH_MSGR_TAG_WAIT);
       return true;
     }
@@ -1260,4 +1193,11 @@ bool InfRcConnection::replace(Infiniband::QueuePairTuple &incoming_qpt,
     return false;
   }
   return true;
+}
+
+void InfRcConnection::handle_pong(const entity_addr_t &addr)
+{
+  ldout(infrc_msgr->cct, 20) << __func__ << dendl;
+  last_pong = ceph_clock_now(infrc_msgr->cct);
+  keepalive_retry = 0;
 }

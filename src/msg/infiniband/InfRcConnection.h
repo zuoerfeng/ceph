@@ -26,13 +26,24 @@ class InfRcWorker;
 class InfRcWorkerPool;
 class InfRcMessenger;
 
-#define INFRC_UDP_MAGICCODE "deadbeaf"
-#define INFRC_UDP_RECONNECT 1 << 1
+#define INFRC_MAGIC_CODE     "deadbeaf"
 
-struct InfRcUdpMsg {
-  char magic_code[8];
-  char tag;
-}__attribute__((packed));
+#define INFRC_UDP_BOOT       1 << 1
+#define INFRC_UDP_BOOT_ACK   1 << 2
+#define INFRC_UDP_PING       1 << 3
+#define INFRC_UDP_PONG       1 << 4
+#define INFRC_UDP_BROKEN     1 << 5
+
+struct InfRcMsg {
+  __le32 tag;
+  ceph_entity_addr addr;
+  union {
+    struct {
+      Infiniband::ceph_queue_pair_tuple qpt;
+    } __attribute__((packed)) boot;
+  } payload;
+  __u8 magic_code[8];
+} __attribute__((packed));
 
 #define INFRC_MSG_FIRST 1 << 1
 #define INFRC_MSG_CONTINUE 1 << 2
@@ -42,8 +53,9 @@ class InfRcConnection : public Connection {
   // need an entry for the headers.
   enum { MAX_TX_SGE_COUNT = 24 };
   static const uint32_t MIN_ZERO_COPY_SGE = 500;
-  static const uint32_t STANDBY_RECONNECT_PERIOD_MS = 1000;
-  static const uint32_t STANDBY_RECONNECT_COUNT = 8;
+  static const uint32_t KEEPALIVE_MIN_PREIOD_MS = 500;
+  static const uint32_t KEEPALIVE_TIMEOUT_MS = 5000;
+  static const uint32_t KEEPALIVE_RETRY_COUNT = 8;
 
   Infiniband::Infiniband *infiniband;
   Infiniband::QueuePair *qp;
@@ -57,12 +69,14 @@ class InfRcConnection : public Connection {
   uint32_t connect_seq;
   utime_t backoff;         // backoff time
   utime_t last_wakeup;
+  utime_t last_ping;
+  utime_t last_pong;
   uint64_t out_seq, in_seq;
   int state;
   Messenger::Policy policy;
   int client_setup_socket; // UDP socket for outgoing setup requests
   uint32_t exchange_count;
-  uint32_t standby_reconnect_count;
+  uint32_t keepalive_retry;
   set<uint64_t> register_time_events; // need to delete it if stop
   list<Message*> pending_send;
   list<Message*> local_messages;      // local deliver
@@ -112,8 +126,7 @@ class InfRcConnection : public Connection {
   void handle_other_tag(Infiniband::QueuePairTuple &incoming_qpt);
   void was_session_reset();
   int randomize_out_seq();
-  int send_udp_packet(char *buf, size_t len);
-  int recv_udp_packet(char *buf, size_t len);
+  int recv_udp_msg(const char tag, char *buf, size_t len);
   void discard_pending_queue_to(uint64_t seq);
   int send_zero_copy_msg(Message *m, Infiniband::BufferDescriptor *bd);
   int send_zero_copy(bufferlist &bl, Infiniband::BufferDescriptor *bd, Message *m, const char tag);
@@ -167,7 +180,7 @@ class InfRcConnection : public Connection {
     assert(state == STATE_NEW);
     return _ready(incoming_qpt, outgoing_qpt);
   }
-  void send_keepalive() {}
+  void send_keepalive();
   void mark_disposable() {
     Mutex::Locker l(cm_lock);
     policy.lossy = true;
@@ -199,6 +212,7 @@ class InfRcConnection : public Connection {
     Mutex::Locker l(cm_lock);
     _fault();
   }
+  void handle_pong(const entity_addr_t &addr);
 };
 
 typedef boost::intrusive_ptr<InfRcConnection> InfRcConnectionRef;

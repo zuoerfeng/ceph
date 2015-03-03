@@ -32,13 +32,29 @@ class Infiniband {
  public:
   static const char* wc_status_to_string(int status);
 
+#define InfinibandQPT \
+    __le32   qpn; \
+    __le32   psn; \
+    __le64   features; \
+    __le16   lid; \
+    __u8     tag; \
+    __u8     host_type; \
+    __le32   global_seq; \
+    __le32   connect_seq; \
+    __le64   msg_seq; \
+    ceph_entity_addr addr; \
+    ceph_entity_addr peer_addr;
+
+  struct ceph_queue_pair_tuple {
+    InfinibandQPT
+  } __attribute__((packed));
+
   // this class exists simply for passing queue pair handshake information
   // back and forth.
   class QueuePairTuple {
    public:
     QueuePairTuple() : qpn(0), psn(0), features(0), lid(0), tag(0), host_type(0),
                        global_seq(0), connect_seq(0), msg_seq(0) {
-      assert(sizeof(QueuePairTuple) == 36+2*sizeof(ceph_entity_addr));
     }
     QueuePairTuple(uint16_t lid, uint32_t qpn, uint32_t psn, uint64_t f,
                    uint8_t tag, uint8_t t, uint32_t gseq, uint32_t cseq, uint64_t mseq,
@@ -47,6 +63,7 @@ class Infiniband {
         global_seq(gseq), connect_seq(cseq), msg_seq(mseq) {
       set_sender_addr(s);
       set_recevier_addr(r);
+      assert(sizeof(QueuePairTuple) == 36+2*sizeof(ceph_entity_addr));
     }
     __le16 get_lid() const { return lid; }
     __le32 get_qpn() const { return qpn; }
@@ -72,18 +89,7 @@ class Infiniband {
     }
 
    private:
-    __le32   qpn;            // queue pair number
-    __le32   psn;            // initial packet sequence number
-    __le64   features;
-    __le16   lid;            // infiniband address: "local id"
-    __u8     tag;
-    __u8     host_type;
-    __le32   global_seq;     /* count connections initiated by this host */
-    __le32   connect_seq;
-    __le64   msg_seq;
-    // for received requests
-    ceph_entity_addr addr;      // address for the sender
-    ceph_entity_addr peer_addr;      // address for the receiver
+    InfinibandQPT
   } __attribute__((packed));
 
   /**

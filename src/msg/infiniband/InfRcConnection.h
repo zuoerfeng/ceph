@@ -121,7 +121,7 @@ class InfRcConnection : public Connection {
   EventCallbackRef wakeup_handler;
 
   void _stop();
-  void _fault();
+  void _fault(bool onlive=false);
   void retry_send(Message *m);
   void handle_other_tag(Infiniband::QueuePairTuple &incoming_qpt);
   void was_session_reset();
@@ -208,11 +208,10 @@ class InfRcConnection : public Connection {
   bool replace(Infiniband::QueuePairTuple &incoming_qpt, Infiniband::QueuePairTuple &outgoing_qpt);
   void wakeup_writer() { center->dispatch_event_external(write_handler); }
   bool send_pending_messages();
-  void fault() {
+  void fault(bool onlive=false) {
     Mutex::Locker l(cm_lock);
-    _fault();
+    _fault(onlive);
   }
-  void handle_pong(const entity_addr_t &addr);
 };
 
 typedef boost::intrusive_ptr<InfRcConnection> InfRcConnectionRef;

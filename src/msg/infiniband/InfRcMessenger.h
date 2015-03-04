@@ -402,7 +402,6 @@ class InfRcMessenger : public SimplePolicyMessenger {
 
   Mutex lock;
   ceph::unordered_map<entity_addr_t, InfRcConnectionRef> connections;
-  set<InfRcConnectionRef> pending_conns;
 
   Mutex deleted_lock;
   set<InfRcConnectionRef> deleted_conns;
@@ -475,26 +474,6 @@ class InfRcMessenger : public SimplePolicyMessenger {
    */
   int get_proto_version(int peer_type, bool connect);
 
-  int accept_conn(InfRcConnectionRef conn) {
-    Mutex::Locker l(lock);
-    if (connections.count(conn->get_peer_addr())) {
-      InfRcConnectionRef existing = connections[conn->get_peer_addr()];
-
-      // lazy delete, see "deleted_conns"
-      // If conn already in, we will return 0
-      Mutex::Locker l(deleted_lock);
-      if (deleted_conns.count(existing)) {
-        deleted_conns.erase(existing);
-      } else if (conn != existing) {
-        return -1;
-      }
-    }
-    connections[conn->get_peer_addr()] = conn;
-    pending_conns.erase(conn);
-    return 0;
-
-  }
-
   /**
    * Unregister connection from `conns`
    * `external` is used to indicate whether need to lock InfRcMessenger::lock,
@@ -507,7 +486,7 @@ class InfRcMessenger : public SimplePolicyMessenger {
   }
 
   void accept(Infiniband::QueuePairTuple &incoming_qpt, entity_addr_t &socket_addr);
-  void handle_ping(entity_addr_t addr);
+  void handle_ping(entity_addr_t &addr, entity_addr_t &sendaddr);
   void recv_message();
   int recv_udp_msg(int sd, InfRcMsg &msg, uint8_t extag, entity_addr_t *addr=NULL);
   int send_udp_msg(int sd, const char tag, char *buf, size_t len, entity_addr_t &peer_ddr, const entity_addr_t &myaddr);

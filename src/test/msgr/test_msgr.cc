@@ -489,8 +489,8 @@ TEST_P(MessengerTest, StatelessTest) {
   server_conn->mark_down();
   ASSERT_FALSE(server_conn->is_connected());
   conn->send_keepalive();
-  CHECK_AND_WAIT_TRUE(!conn->is_connected());
-  ASSERT_FALSE(conn->is_connected());
+  while (conn->is_connected())
+    usleep(1000*500);
   conn = client_msgr->get_connection(server_msgr->get_myinst());
   {
     m = new MPing();
@@ -1263,6 +1263,7 @@ class MarkdownDispatcher : public Dispatcher {
 // Markdown with external lock
 TEST_P(MessengerTest, MarkdownTest) {
   Messenger *server_msgr2 = Messenger::create(g_ceph_context, string(GetParam()), entity_name_t::OSD(0), "server", getpid());
+  server_msgr2->set_default_policy(Messenger::Policy::stateless_server(0, 0));
   MarkdownDispatcher cli_dispatcher(false), srv_dispatcher(true);
   entity_addr_t bind_addr;
   bind_addr.parse("127.0.0.1:16800");

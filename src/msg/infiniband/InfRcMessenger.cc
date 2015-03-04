@@ -891,13 +891,6 @@ void InfRcMessenger::mark_down_all()
   ldout(cct, 1) << __func__ << dendl;
 
   lock.Lock();
-  while (!pending_conns.empty()) {
-    set<InfRcConnectionRef>::iterator it = pending_conns.begin();
-    InfRcConnectionRef p = *it;
-    ldout(cct, 5) << __func__ << " delete " << p << dendl;
-    p->mark_down();
-    pending_conns.erase(it);
-  }
 
   while (!connections.empty()) {
     ceph::unordered_map<entity_addr_t, InfRcConnectionRef>::iterator it = connections.begin();
@@ -960,7 +953,7 @@ ConnectionRef InfRcMessenger::get_connection(const entity_inst_t& dest)
     ldout(cct, 10) << __func__ << " " << dest << " new " << conn << dendl;
     InfRcWorker *w = pool->get_worker();
     conn = w->create_connection(dest.addr, dest.name.type(), this);
-    pending_conns.insert(conn);
+    connections[dest.addr] = conn;
     conn->connect();
   }
 
@@ -1097,7 +1090,9 @@ void InfRcMessenger::recv_message()
       memcpy(&qpt, &msg.payload.boot.qpt, sizeof(msg.payload.boot.qpt));
       accept(qpt, addr);
     } else if (msg.tag == INFRC_UDP_PING) {
-      handle_ping(entity_addr_t(msg.addr));
+      entity_addr_t send_addr = msg.addr, peer_addr = entity_addr_t(msg.addr);
+      send_addr.set_port(addr.get_port());
+      handle_ping(peer_addr, send_addr);
     }
   }
 }
@@ -1175,15 +1170,21 @@ void InfRcMessenger::accept(Infiniband::QueuePairTuple &incoming_qpt, entity_add
     ldout(cct, 20) << __func__ << " sending qpt=" << outgoing_qpt << dendl;
 }
 
-void InfRcMessenger::handle_ping(entity_addr_t addr)
+void InfRcMessenger::handle_ping(entity_addr_t &addr, entity_addr_t &sendaddr)
 {
   Mutex::Locker l(lock);
   InfRcConnectionRef conn = _lookup_conn(addr);
   if (conn) {
     ldout(cct, 10) << __func__ << " got con ping message" << conn << dendl;
-    if (send_udp_msg(server_setup_socket, INFRC_UDP_PONG, NULL, 0, addr, get_myaddr()) < 0)
+    if (conn->is_connected()) {
+      if (!send_udp_msg(server_setup_socket, INFRC_UDP_PONG, NULL, 0, sendaddr, get_myaddr()))
+        return ;
       ldout(cct, 0) << __func__ << " send pong message failed" << dendl;
+    }
   }
+
+  if (send_udp_msg(server_setup_socket, INFRC_UDP_BROKEN, NULL, 0, sendaddr, get_myaddr()) < 0)
+    ldout(cct, 0) << __func__ << " send broken message failed" << dendl;
 }
 
 void InfRcMessenger::learned_addr(const entity_addr_t &peer_addr_for_me)
@@ -1243,9 +1244,10 @@ int InfRcMessenger::recv_udp_msg(int sd, InfRcMsg &msg, uint8_t extag, entity_ad
     ldout(cct, 0) << __func__ << " wrong tag: " << msg.tag << dendl;
     return 1;
   } else { // valid message
-    if (addr)
+    if (addr) {
       *addr = socket_addr;
-    ldout(cct, 0) << __func__ << " get valid udp message(" << msg.tag << ")" << dendl;
+    }
+    ldout(cct, 5) << __func__ << " get valid udp message(" << msg.tag << ")" << dendl;
     return 0;
   }
 }

@@ -58,24 +58,11 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
   int ib_physical_port;             // physical port number on the HCA
   int lid;                          // local id for this HCA and physical port
 
-  static const uint32_t MAX_MESSAGE_LEN = ((1 << 23) + 200);
-  // Since we always use at most 1 SGE per receive request, there is no need
-  // to set this parameter any higher. In fact, larger values for this
-  // parameter result in increased descriptor size, which means that the
-  // Infiniband controller needs to fetch more data from host memory,
-  // which results in a higher number of on-controller cache misses.
-  static const uint32_t MAX_SHARED_RX_SGE_COUNT = 1;
-  static const uint32_t MAX_TX_QUEUE_DEPTH = 16;
-  // With 64 KB seglets 1 MB is fractured into 16 or 17 pieces, plus we
-  // need an entry for the headers.
-  enum { MAX_TX_SGE_COUNT = 24 };
-  static const uint32_t MAX_SHARED_RX_QUEUE_DEPTH = 32;
-
   /**
    * The number of client receive buffers that are in use, either from
    * oustanding_buffers or from RPC responses that have borrowed these
    * buffers and will return them with the PayloadChunk mechanism.
-   * Invariant: num_used_srq_buffers <= MAX_SHARED_RX_QUEUE_DEPTH.
+   * Invariant: num_used_srq_buffers <= max_rx_buffers.
    */
   RegisteredBuffers *rx_buffers;    // Infiniband receive buffers, written directly by the HCA.
   RegisteredBuffers *tx_buffers;    // Infiniband transmit buffers.
@@ -86,8 +73,23 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
   uint32_t num_used_srq_buffers;
   vector<BufferDescriptor*> free_tx_buffers;
   list<InfRcConnectionRef> pending_sent_conns;
+  uint32_t message_len;
+  // Since we always use at most 1 SGE per receive request, there is no need
+  // to set this parameter any higher. In fact, larger values for this
+  // parameter result in increased descriptor size, which means that the
+  // Infiniband controller needs to fetch more data from host memory,
+  // which results in a higher number of on-controller cache misses.
+  uint32_t max_rx_buffers;
+  uint32_t max_tx_buffers;
 
  public:
+  // Since we always use at most 1 SGE per receive request, there is no need
+  // to set this parameter any higher. In fact, larger values for this
+  // parameter result in increased descriptor size, which means that the
+  // Infiniband controller needs to fetch more data from host memory,
+  // which results in a higher number of on-controller cache misses.
+  static const uint32_t MAX_SHARED_RX_SGE_COUNT = 1;
+
   /// Starting address of the region registered with the HCA for zero-copy
   /// transmission, if any. If no region is registered then 0.
   /// See registerMemory().
@@ -153,6 +155,8 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
   int get_ib_physical_port() { return ib_physical_port; }
   int get_lid() { return lid; }
   ibv_srq* get_srq() { return srq; }
+  uint32_t get_max_rx_buffers() const { return max_rx_buffers; }
+  uint32_t get_max_tx_buffers() const { return max_tx_buffers; }
 };
 
 
@@ -168,15 +172,7 @@ class InfRcWorker : public Thread {
   bool done;
   int id;
 
-  // Since we always use at most 1 SGE per receive request, there is no need
-  // to set this parameter any higher. In fact, larger values for this
-  // parameter result in increased descriptor size, which means that the
-  // Infiniband controller needs to fetch more data from host memory,
-  // which results in a higher number of on-controller cache misses.
-  static const uint32_t MAX_TX_QUEUE_DEPTH = 16;
   static const uint32_t MIN_PREFETCH_LEN = 1024;
-  static const uint32_t MAX_SHARED_RX_QUEUE_DEPTH = 32;
-
   static const uint32_t MIN_ACK_LEN = 128;
   /**
    * Used by this class to make all Infiniband verb calls.  In normal
@@ -220,6 +216,8 @@ class InfRcWorker : public Thread {
   /// save them in this vector and delete them at a safe time, when there are
   /// no outstanding transmit buffers to be lost.
   vector<QueuePair*> dead_queue_pairs;
+
+  uint64_t low_level_rx_buffers;
 
   int send_zero_copy(Message *m, InfRcConnectionRef conn, QueuePair* qp, BufferDescriptor *bd);
 

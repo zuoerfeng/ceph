@@ -166,7 +166,7 @@ InfRcWorker::InfRcWorker(CephContext *c, InfRcWorkerPool *p, int i)
   : cct(c), pool(p), done(false), id(i), infiniband(p->infiniband),
     rx_cq(NULL), tx_cq(NULL), rxcq_events_need_ack(0), txcq_events_need_ack(0),
     rx_cc(NULL), tx_cc(NULL), lock("InfRcWorker::lock"),
-    center(c)
+    low_level_rx_buffers(cct->_conf->ms_infiniband_low_level_receive_buffers), center(c)
 {
   center.init(5000);
 }
@@ -180,7 +180,7 @@ int InfRcWorker::start()
   if (!rx_cc)
     goto err;
 
-  rx_cq = infiniband->create_comp_queue(MAX_SHARED_RX_QUEUE_DEPTH, rx_cc);
+  rx_cq = infiniband->create_comp_queue(pool->get_max_rx_buffers(), rx_cc);
   if (!rx_cq)
     goto err;
 
@@ -191,7 +191,7 @@ int InfRcWorker::start()
   if (!tx_cc)
     goto err;
 
-  tx_cq = infiniband->create_comp_queue(MAX_TX_QUEUE_DEPTH, tx_cc);
+  tx_cq = infiniband->create_comp_queue(pool->get_max_tx_buffers(), tx_cc);
   if (!tx_cq)
     goto err;
   center.create_file_event(tx_cc->get_fd(), EVENT_READABLE,
@@ -301,8 +301,8 @@ InfRcConnectionRef InfRcWorker::create_connection(const entity_addr_t& dest, int
   ldout(cct, 20) << __func__ << " dest=" << dest << " type=" << type << " messenger=" << m << dendl;
   QueuePair *qp = infiniband->create_queue_pair(IBV_QPT_RC, pool->get_ib_physical_port(),
                                                 pool->get_srq(), tx_cq->get_cq(), rx_cq->get_cq(),
-                                                MAX_TX_QUEUE_DEPTH,
-                                                MAX_SHARED_RX_QUEUE_DEPTH);
+                                                pool->get_max_tx_buffers(),
+                                                pool->get_max_rx_buffers());
   // create connection
   InfRcConnectionRef conn = new InfRcConnection(cct, m, this, pool, qp,
                                                 pool->infiniband, dest, type);
@@ -346,7 +346,7 @@ void InfRcWorker::handle_rx_event()
 
     bufferptr bp;
     ceph_msg_header header(*reinterpret_cast<ceph_msg_header*>(bd->buffer));
-    if (pool->incr_used_srq_buffers() >= MAX_SHARED_RX_QUEUE_DEPTH / 2) {
+    if (pool->incr_used_srq_buffers() >= low_level_rx_buffers) {
       // srq is low on buffers, better return this one
       bp = bufferptr(bd->buffer, response->byte_len);
       ldout(cct, 20) << __func__ << " low srq buffer level, use copy instead" << dendl;
@@ -401,10 +401,11 @@ void InfRcWorker::handle_tx_event()
   if (!tx_cc->get_cq_event())
     return ;
 
-  ibv_wc ret_array[MAX_TX_QUEUE_DEPTH];
+  uint64_t tx_queue_depth = pool->get_max_tx_buffers();
+  ibv_wc ret_array[tx_queue_depth];
   bool rearmed = false;
  again:
-  int n = tx_cq->poll_completion_queue(MAX_TX_QUEUE_DEPTH, ret_array);
+  int n = tx_cq->poll_completion_queue(tx_queue_depth, ret_array);
   ldout(cct, 20) << __func__ << " pool completion queue got " << n
                  << " responses."<< dendl;
 
@@ -539,7 +540,10 @@ InfRcWorkerPool::InfRcWorkerPool(CephContext *c)
     ib_device_name(cct->_conf->ms_infiniband_device_name),
     ib_physical_port(cct->_conf->ms_infiniband_port), lid(-1),
     rx_buffers(NULL), tx_buffers(NULL), srq(NULL), lock("InfRcWorkerPool::Lock"),
-    num_used_srq_buffers(0), log_memory_base(NULL), log_memory_bytes(0), log_memory_region(NULL),
+    num_used_srq_buffers(0), message_len(cct->_conf->ms_infiniband_buffer_len),
+    max_rx_buffers(cct->_conf->ms_infiniband_receive_buffers),
+    max_tx_buffers(cct->_conf->ms_infiniband_send_buffers),
+    log_memory_base(NULL), log_memory_bytes(0), log_memory_region(NULL),
     infiniband(new Infiniband(cct, ib_device_name.length() ? ib_device_name.c_str(): NULL))
 {
   assert(infiniband);
@@ -573,7 +577,7 @@ int InfRcWorkerPool::start()
     // to these queues only. the motiviation is to avoid having to post at
     // least one buffer to every single queue pair (we may have thousands of
     // them with megabyte buffers).
-    srq = infiniband->create_shared_receive_queue(MAX_SHARED_RX_QUEUE_DEPTH,
+    srq = infiniband->create_shared_receive_queue(max_rx_buffers,
                                                   MAX_SHARED_RX_SGE_COUNT);
     if (!srq) {
       lderr(cct) << __func__ << " failed to create shared receive queue" << dendl;
@@ -587,15 +591,15 @@ int InfRcWorkerPool::start()
     // and round up to the next multiple of 4096.  This approach isn't
     // perfect (for example buffers of 1<<23 bytes also seem to be slow)
     // but it will work for now.
-    uint32_t buffer_size = (MAX_MESSAGE_LEN + 4095) & ~0xfff;
+    uint32_t buffer_size = (message_len + 4095) & ~0xfff;
 
     rx_buffers = new RegisteredBuffers(infiniband->pd, buffer_size,
-                                       uint32_t(MAX_SHARED_RX_QUEUE_DEPTH));
+                                       max_rx_buffers);
     if (!rx_buffers) {
       lderr(cct) << __func__ << " failed to malloc rx_buffers: " << cpp_strerror(errno) << dendl;
       goto err;
     }
-    num_used_srq_buffers = MAX_SHARED_RX_QUEUE_DEPTH;
+    num_used_srq_buffers = max_rx_buffers;
     for (BufferDescriptor *bd = rx_buffers->begin();
          bd != rx_buffers->end(); ++bd) {
       if (post_srq_receive(bd)) {
@@ -606,7 +610,7 @@ int InfRcWorkerPool::start()
     assert(num_used_srq_buffers == 0);
 
     tx_buffers = new RegisteredBuffers(infiniband->pd, buffer_size,
-                                       uint32_t(MAX_TX_QUEUE_DEPTH));
+                                       cct->_conf->ms_infiniband_send_buffers);
     if (!tx_buffers) {
       lderr(cct) << __func__ << " failed to malloc tx_buffers: " << cpp_strerror(errno) << dendl;
       goto err;

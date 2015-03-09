@@ -171,6 +171,10 @@ OPTION(ms_infiniband_device_name, OPT_STR, "")
 OPTION(ms_infiniband_port, OPT_INT, 1)
 OPTION(ms_infiniband_exchange_timeout_ms, OPT_U32, 50)
 OPTION(ms_infiniband_exchange_max_timeouts, OPT_U32, 5)
+OPTION(ms_infiniband_buffer_len, OPT_U32, (1 << 23)+200)
+OPTION(ms_infiniband_send_buffers, OPT_U32, 32)
+OPTION(ms_infiniband_receive_buffers, OPT_U32, 64)
+OPTION(ms_infiniband_low_level_receive_buffers, OPT_U32, 32)
 
 OPTION(inject_early_sigterm, OPT_BOOL, false)
 

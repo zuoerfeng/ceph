@@ -152,7 +152,7 @@ static void get_infrc_msg(InfRcMsg &msg, const ceph_entity_addr &addr, const cha
 {
   memset(&msg, 0, sizeof(msg));
   msg.addr = addr;
-  memcpy(msg.magic_code, INFRC_MAGIC_CODE, sizeof(INFRC_MAGIC_CODE));
+  memcpy(msg.magic_code, INFRC_MAGIC_CODE, sizeof(INFRC_MAGIC_CODE)-1);
   msg.tag = tag;
   if (buf)
     memcpy(&msg.payload, buf, len);

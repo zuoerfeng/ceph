@@ -345,6 +345,7 @@ void InfRcConnection::process()
                 center->dispatch_event_external(
                     EventCallbackRef(new C_infrc_deliver_connect(infrc_msgr, this)));
                 infrc_msgr->ms_deliver_handle_fast_connect(this);
+                set_features(policy.features_supported & incoming_qpt.get_features());
                 state = STATE_OPEN;
                 if (in_queue())
                   center->dispatch_event_external(write_handler);
@@ -907,6 +908,7 @@ int InfRcConnection::_ready(Infiniband::QueuePairTuple &incoming_qpt,
     infrc_msgr->ms_deliver_handle_fast_accept(this);
     connect_seq = incoming_qpt.get_connect_seq() + 1;
     global_seq = incoming_qpt.get_global_seq();
+    set_features(policy.features_supported & incoming_qpt.get_features());
     state = STATE_OPEN;
     outgoing_qpt = build_qp_tuple();
     if (in_queue())

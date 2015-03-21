@@ -376,6 +376,7 @@ int EventCenter::process_events(int timeout_microseconds)
       cur_process.pop_front();
       if (e)
         e->do_request(0);
+      numevents++;
     }
   }
   return numevents;

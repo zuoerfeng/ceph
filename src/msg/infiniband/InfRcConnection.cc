@@ -335,9 +335,9 @@ void InfRcConnection::process()
                 }
                 cm_lock.Lock();
                 if (state != STATE_CONNECTING) {
-                  ldout(infrc_msgr->cct, 1) << __func__ << " conn is already down " << dendl;
-                  assert(state == STATE_CLOSED);
-                  goto fail;
+                  ldout(infrc_msgr->cct, 1) << __func__ << " conn may already down or accept peer connect msg" << dendl;
+                  assert(state == STATE_CLOSED || state == STATE_OPEN);
+                  return ;
                 }
                 connect_seq++;
                 assert(connect_seq == incoming_qpt.get_connect_seq());

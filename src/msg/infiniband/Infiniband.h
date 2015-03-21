@@ -100,8 +100,8 @@ class Infiniband {
    */
   explicit Infiniband(CephContext *cct, const char* device_name)
   : cct(cct) {
-    device = new Device(device_name);
-    pd = new ProtectionDomain(device);
+    device = new Device(cct, device_name);
+    pd = new ProtectionDomain(cct, device);
     assert(set_nonblocking(device->ctxt->async_fd) == 0);
   }
 
@@ -115,10 +115,10 @@ class Infiniband {
 
   class DeviceList {
    public:
-    DeviceList(): devices(ibv_get_device_list(&num)) {
+    DeviceList(CephContext *cct): devices(ibv_get_device_list(&num)) {
       if (devices == NULL || num == 0) {
-       derr << __func__ << "Could not get infiniband device list: "
-            << cpp_strerror(errno)<< dendl;
+       lderr(cct) << __func__ << "Could not get infiniband device list: "
+                  << cpp_strerror(errno)<< dendl;
        assert(0);
       }
     }
@@ -141,22 +141,22 @@ class Infiniband {
 
   class Device {
    public:
-    explicit Device(const char* name): ctxt(NULL) {
+    explicit Device(CephContext *c, const char* name): cct(c), ctxt(NULL) {
       // The lifetime of the device list needs to extend
       // through the call to ibv_open_device.
-      DeviceList device_list;
+      DeviceList device_list(cct);
 
       ibv_device* dev = device_list.lookup(name);
       if (dev == NULL) {
-        derr << __func__ << " failed to find infiniband device: "
-             << name << " " << cpp_strerror(errno) << dendl;
+        lderr(cct) << __func__ << " failed to find infiniband device: "
+                   << name << " " << cpp_strerror(errno) << dendl;
         assert(0);
       }
 
       ctxt = ibv_open_device(dev);
       if (ctxt == NULL) {
-        derr << __func__ << " failed to open infiniband device: "
-             << name << cpp_strerror(errno) << dendl;
+        lderr(cct) << __func__ << " failed to open infiniband device: "
+                   << name << cpp_strerror(errno) << dendl;
         assert(0);
       }
     }
@@ -164,31 +164,33 @@ class Infiniband {
     ~Device() {
       int rc = ibv_close_device(ctxt);
       if (rc != 0)
-        derr << __func__ << " ibv_close_device failed: "
-             << cpp_strerror(errno) << dendl;
+        lderr(cct) << __func__ << " ibv_close_device failed: "
+                   << cpp_strerror(errno) << dendl;
     }
 
-    ibv_context* ctxt; // const after construction
+    CephContext *cct;
+    ibv_context *ctxt; // const after construction
   };
 
   class ProtectionDomain {
    public:
-    explicit ProtectionDomain(Device *device)
-      : pd(ibv_alloc_pd(device->ctxt))
+    explicit ProtectionDomain(CephContext *c, Device *device)
+      : cct(c), pd(ibv_alloc_pd(device->ctxt))
     {
       if (pd == NULL) {
-        derr << __func__ << " failed to allocate infiniband protection domain: "
-             << cpp_strerror(errno) << dendl;
+        lderr(cct) << __func__ << " failed to allocate infiniband protection domain: "
+                    << cpp_strerror(errno) << dendl;
         assert(0);
       }
     }
     ~ProtectionDomain() {
       int rc = ibv_dealloc_pd(pd);
       if (rc != 0) {
-        derr << __func__ << " ibv_dealloc_pd failed: "
-             << cpp_strerror(errno) << dendl;
+        lderr(cct) << __func__ << " ibv_dealloc_pd failed: "
+                   << cpp_strerror(errno) << dendl;
       }
     }
+    CephContext *cct;
     ibv_pd* const pd;
   };
 
@@ -233,8 +235,8 @@ class Infiniband {
 
       int r = ibv_query_qp(qp, &qpa, IBV_QP_DEST_QPN, &qpia);
       if (r) {
-          derr << __func__ << " failed to query qp: "
-               << cpp_strerror(errno) << dendl;
+          lderr(infiniband.cct) << __func__ << " failed to query qp: "
+                                << cpp_strerror(errno) << dendl;
           return -1;
       }
 
@@ -253,8 +255,8 @@ class Infiniband {
 
       int r = ibv_query_qp(qp, &qpa, IBV_QP_AV, &qpia);
       if (r) {
-          derr << __func__ << " failed to query qp: "
-               << cpp_strerror(errno) << dendl;
+          lderr(infiniband.cct) << __func__ << " failed to query qp: "
+                                << cpp_strerror(errno) << dendl;
           return -1;
       }
 
@@ -271,8 +273,8 @@ class Infiniband {
 
       int r = ibv_query_qp(qp, &qpa, IBV_QP_STATE, &qpia);
       if (r) {
-          derr << __func__ << " failed to get state: "
-               << cpp_strerror(errno) << dendl;
+          lderr(infiniband.cct) << __func__ << " failed to get state: "
+                                << cpp_strerror(errno) << dendl;
           return -1;
       }
       return qpa.qp_state;
@@ -286,8 +288,8 @@ class Infiniband {
 
       int r = ibv_query_qp(qp, &qpa, -1, &qpia);
       if (r) {
-          derr << __func__ << " failed to get state: "
-               << cpp_strerror(errno) << dendl;
+          lderr(infiniband.cct) << __func__ << " failed to get state: "
+                                << cpp_strerror(errno) << dendl;
           return true;
       }
       return qpa.cur_qp_state == IBV_QPS_ERR;
@@ -396,22 +398,22 @@ class Infiniband {
      * \throw
      *      TransportException if allocation or registration failed.
      */
-    RegisteredBuffers(ProtectionDomain *pd, const uint32_t bsize,
+    RegisteredBuffers(CephContext *cct, ProtectionDomain *pd, const uint32_t bsize,
                       const uint32_t bcount)
       : buffer_size(bsize), buffer_count(bcount), base_pointer(NULL),
         descriptors(NULL) {
       const size_t bytes = buffer_size * buffer_count;
       int r = posix_memalign(&base_pointer, 4096, bytes);
       if (r) {
-        derr << __func__ << " failed to allocate " << bytes
-             << " bytes of memory: " << cpp_strerror(r) << dendl;
+        lderr(cct) << __func__ << " failed to allocate " << bytes
+                   << " bytes of memory: " << cpp_strerror(r) << dendl;
         assert(0);
       }
 
       ibv_mr *mr = ibv_reg_mr(pd->pd, base_pointer, bytes,
                               IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE);
       if (mr == NULL) {
-        derr << __func__ << " failed to register buffer" << dendl;
+        lderr(cct) << __func__ << " failed to register buffer" << dendl;
         assert(0);
       }
 

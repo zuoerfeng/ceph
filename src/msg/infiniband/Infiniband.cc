@@ -652,8 +652,10 @@ bool Infiniband::CompletionChannel::get_cq_event()
 //-------------------------------------
 Infiniband::CompletionQueue::~CompletionQueue()
 {
-  int r = ibv_destroy_cq(cq);
-  assert(r == 0);
+  if (cq) {
+    int r = ibv_destroy_cq(cq);
+    assert(r == 0);
+  }
 }
 
 int Infiniband::CompletionQueue::init()

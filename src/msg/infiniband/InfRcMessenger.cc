@@ -593,7 +593,7 @@ int InfRcWorkerPool::start()
     // but it will work for now.
     uint32_t buffer_size = (message_len + 4095) & ~0xfff;
 
-    rx_buffers = new RegisteredBuffers(infiniband->pd, buffer_size,
+    rx_buffers = new RegisteredBuffers(cct, infiniband->pd, buffer_size,
                                        max_rx_buffers);
     if (!rx_buffers) {
       lderr(cct) << __func__ << " failed to malloc rx_buffers: " << cpp_strerror(errno) << dendl;
@@ -609,7 +609,7 @@ int InfRcWorkerPool::start()
     }
     assert(num_used_srq_buffers == 0);
 
-    tx_buffers = new RegisteredBuffers(infiniband->pd, buffer_size,
+    tx_buffers = new RegisteredBuffers(cct, infiniband->pd, buffer_size,
                                        cct->_conf->ms_infiniband_send_buffers);
     if (!tx_buffers) {
       lderr(cct) << __func__ << " failed to malloc tx_buffers: " << cpp_strerror(errno) << dendl;

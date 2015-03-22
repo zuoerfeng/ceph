@@ -36,6 +36,10 @@ static ostream& _prefix(std::ostream *_dout, InfRcWorkerPool *p) {
   return *_dout << " InfRcWorkerPool--";
 }
 
+static ostream& _prefix(std::ostream *_dout, InfRcWorkerPool::ManagementThread *p) {
+  return *_dout << " ManagementThread--";
+}
+
 
 /**
  * \file
@@ -164,8 +168,7 @@ static void get_infrc_msg(InfRcMsg &msg, const ceph_entity_addr &addr, const cha
 //------------------------------
 InfRcWorker::InfRcWorker(CephContext *c, InfRcWorkerPool *p, int i)
   : cct(c), pool(p), done(false), id(i), infiniband(p->infiniband),
-    rx_cq(NULL), tx_cq(NULL), rxcq_events_need_ack(0), txcq_events_need_ack(0),
-    rx_cc(NULL), tx_cc(NULL), lock("InfRcWorker::lock"),
+    rx_cq(NULL), tx_cq(NULL), rx_cc(NULL), tx_cc(NULL), lock("InfRcWorker::lock"),
     low_level_rx_buffers(cct->_conf->ms_infiniband_low_level_receive_buffers), center(c)
 {
   center.init(5000);
@@ -249,9 +252,11 @@ void *InfRcWorker::entry()
       // TODO do something?
     } else if (r == 0) {
       // idle
+      Mutex::Locker l(lock);
       for (ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.begin();
            it != qp_conns.end(); ++it)
         it->second.second->send_keepalive();
+
     }
   }
 
@@ -261,11 +266,26 @@ void *InfRcWorker::entry()
 void InfRcWorker::shutdown()
 {
   ldout(cct, 20) << __func__ << dendl;
+
+  Mutex::Locker l(lock);
+  outstanding_buffers.clear();
+  for (ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.begin();
+       it != qp_conns.end(); ++it)
+    it->second.second->mark_down();
+  qp_conns.clear();
+
+  while (!dead_queue_pairs.empty()) {
+    delete dead_queue_pairs.back();
+    dead_queue_pairs.pop_back();
+  }
+
   if (rx_cq) {
+    rx_cc->ack_events();
     delete rx_cq;
     rx_cq = NULL;
   }
   if (tx_cq) {
+    tx_cc->ack_events();
     delete tx_cq;
     tx_cq = NULL;
   }
@@ -276,17 +296,6 @@ void InfRcWorker::shutdown()
   if (tx_cc) {
     delete tx_cc;
     tx_cc = NULL;
-  }
-
-  Mutex::Locker l(lock);
-  outstanding_buffers.clear();
-  for (ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.begin();
-       it != qp_conns.end(); ++it)
-    it->second.second->mark_down();
-  qp_conns.clear();
-  while (!dead_queue_pairs.empty()) {
-    delete dead_queue_pairs.back();
-    dead_queue_pairs.pop_back();
   }
 }
 
@@ -299,16 +308,11 @@ void InfRcWorker::shutdown()
 InfRcConnectionRef InfRcWorker::create_connection(const entity_addr_t& dest, int type, InfRcMessenger *m)
 {
   ldout(cct, 20) << __func__ << " dest=" << dest << " type=" << type << " messenger=" << m << dendl;
-  QueuePair *qp = infiniband->create_queue_pair(IBV_QPT_RC, pool->get_ib_physical_port(),
-                                                pool->get_srq(), tx_cq->get_cq(), rx_cq->get_cq(),
-                                                pool->get_max_tx_buffers(),
-                                                pool->get_max_rx_buffers());
+  QueuePair *qp = get_new_qp();
   // create connection
   InfRcConnectionRef conn = new InfRcConnection(cct, m, this, pool, qp,
                                                 pool->infiniband, dest, type);
-  Mutex::Locker l(lock);
-  assert(!qp_conns.count(qp->get_local_qp_number()));
-  qp_conns[qp->get_local_qp_number()] = make_pair(qp, conn);
+  register_qp(qp, conn);
   return conn;
 }
 
@@ -358,19 +362,16 @@ void InfRcWorker::handle_rx_event()
                                    infrc_buffer_post_buffer, pool));
     }
 
-    lock.Lock();
-    ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.find(response->qp_num);
-    lock.Unlock();
-    if (it == qp_conns.end()) {
+    InfRcConnectionRef conn = get_conn_by_qp(response->qp_num);
+    if (!conn) {
       // discard buffer
       ldout(cct, 0) << __func__ << " missing qp_num " << response->qp_num << ", discard bd "
                     << bd << dendl;
     } else {
-      it->second.second->process_request(bp);
+      conn->process_request(response->qp_num, bp);
+      ldout(cct, 20) << __func__ << " Received message from " << response->src_qp
+                     << " with " << response->byte_len << " bytes" << dendl;
     }
-
-    ldout(cct, 20) << __func__ << " Received message from " << response->src_qp
-                    << " with " << response->byte_len << " bytes" << dendl;
   }
   if (n)
     goto again;
@@ -381,14 +382,6 @@ void InfRcWorker::handle_rx_event()
     // Clean up cq events after rearm notify ensure no new incoming event
     // arrived between polling and rearm
     goto again;
-  }
-
-  /* accumulate number of cq events that need to * be acked, and
-   * periodically ack them
-   */
-  if (++rxcq_events_need_ack == MIN_ACK_LEN) {
-    ibv_ack_cq_events(rx_cq->get_cq(), MIN_ACK_LEN);
-    rxcq_events_need_ack = 0;
   }
 }
 
@@ -421,8 +414,8 @@ void InfRcWorker::handle_tx_event()
       assert(0);
     }
 
-    outstanding_buffers.erase(it);
     InfRcConnectionRef conn = it->second;
+    outstanding_buffers.erase(it);
     lock.Unlock();
     conn->ack_message(ret_array[i], bd);
     pool->post_tx_buffer(bd, i + 1 == n ? true : false);
@@ -447,18 +440,9 @@ void InfRcWorker::handle_tx_event()
   if (outstanding_buffers.empty()) {
     while (!dead_queue_pairs.empty()) {
       ldout(cct, 10) << __func__ << " finally delete qp=" << dead_queue_pairs.back() << dendl;
-      assert(dead_queue_pairs.back()->is_dead());
       delete dead_queue_pairs.back();
       dead_queue_pairs.pop_back();
     }
-  }
-
-  /* accumulate number of cq events that need to * be acked, and
-   * periodically ack them
-   */
-  if (++txcq_events_need_ack == MIN_ACK_LEN) {
-    ibv_ack_cq_events(tx_cq->get_cq(), MIN_ACK_LEN);
-    txcq_events_need_ack = 0;
   }
 }
 
@@ -476,29 +460,25 @@ void InfRcWorker::handle_async_event()
                  << " " << cpp_strerror(errno) << ")" << dendl;
       return;
     }
+    // FIXME: Currently we must ensure no other factor make QP in ERROR state,
+    // otherwise this qp can't be deleted in current cleanup flow.
     if (async_event.event_type == IBV_EVENT_QP_LAST_WQE_REACHED) {
+      uint64_t qpn = async_event.element.qp->qp_num;
       ldout(cct, 10) << __func__ << " event associated qp=" << async_event.element.qp
                      << " evt: " << ibv_event_type_str(async_event.event_type) << dendl;
-      lock.Lock();
-      ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it;
-      it = qp_conns.find(async_event.element.qp->qp_num);
-      if (it == qp_conns.end()) {
-        ldout(cct, 1) << __func__ << " missing qp_num=" << async_event.element.qp->qp_num
-                                  << " discard event" << dendl;
-        ibv_ack_async_event(&async_event);
-        lock.Unlock();
-        return ;
-      }
-      lock.Unlock();
-      if (it->second.second->get_qp()) {
-        ldout(cct, 0) << __func__ << " it's not forwardly stopped by us, reenable=" << it->second.second << dendl;
-        it->second.second->fault();
+      InfRcWorker *worker = pool->get_worker_by_qp(qpn);
+      InfRcConnectionRef conn = worker->get_conn_by_qp(qpn);
+      if (!conn) {
+        ldout(cct, 1) << __func__ << " missing qp_num=" << qpn << " discard event" << dendl;
       } else {
-        Mutex::Locker l(lock);
-        dead_queue_pairs.push_back(it->second.first);
-        ldout(cct, 10) << __func__ << " associated conn=" << it->second.second
-                       << " stop this" << dendl;
-        qp_conns.erase(it);
+        QueuePair *qp = conn->get_qp();
+        if (qp && qp->get_local_qp_number() == qpn) {
+          ldout(cct, 0) << __func__ << " it's not forwardly stopped by us, reenable=" << conn << dendl;
+          conn->fault();
+        } else {
+          ldout(cct, 10) << __func__ << " this qp is discarded for conn=" << conn << ", just delete it"<< dendl;
+        }
+        worker->erase_qpn(qpn);
       }
     } else {
       ldout(cct, 0) << __func__ << " ibv_get_async_event: dev=" << infiniband->device->ctxt
@@ -534,6 +514,19 @@ void InfRcWorker::put_message_buffer(BufferDescriptor *bd)
 //------------------------------
 // InfRcWorkerPool class
 //------------------------------
+void *InfRcWorkerPool::ManagementThread::entry()
+{
+  ldout(cct, 10) << __func__ << " starting" << dendl;
+  while (!done) {
+    ldout(cct, 20) << __func__ << " calling regular process" << dendl;
+    // idle
+    Mutex::Locker l(stop_lock);
+    stop_cond.WaitInterval(cct, stop_lock, utime_t(MANAGEMENT_PERIOD, 0));
+  }
+
+  return 0;
+}
+
 InfRcWorkerPool::InfRcWorkerPool(CephContext *c)
   : cct(c), seq(0), started(false),
     barrier_lock("InfRcWorkerPool::barrier_lock"), barrier_count(0),
@@ -543,6 +536,8 @@ InfRcWorkerPool::InfRcWorkerPool(CephContext *c)
     num_used_srq_buffers(0), message_len(cct->_conf->ms_infiniband_buffer_len),
     max_rx_buffers(cct->_conf->ms_infiniband_receive_buffers),
     max_tx_buffers(cct->_conf->ms_infiniband_send_buffers),
+    qp_to_worker_lock("InfRcWorkerPool::qp_to_worker_lock"),
+    management_thread(this, c),
     log_memory_base(NULL), log_memory_bytes(0), log_memory_region(NULL),
     infiniband(new Infiniband(cct, ib_device_name.length() ? ib_device_name.c_str(): NULL))
 {
@@ -624,6 +619,7 @@ int InfRcWorkerPool::start()
         goto err;
       }
     }
+    management_thread.create();
     started = true;
   }
 
@@ -637,16 +633,14 @@ int InfRcWorkerPool::start()
 void InfRcWorkerPool::shutdown()
 {
   ldout(cct, 20) << __func__ << dendl;
+  management_thread.stop();
+  management_thread.join();
   for (uint64_t i = 0; i < workers.size(); ++i) {
     if (workers[i]->is_started()) {
       workers[i]->stop();
       workers[i]->join();
     }
     delete workers[i];
-  }
-  if (infiniband) {
-    delete infiniband;
-    infiniband = NULL;
   }
   if (srq) {
     infiniband->destroy_shared_receive_queue(srq);
@@ -659,6 +653,10 @@ void InfRcWorkerPool::shutdown()
   if (tx_buffers) {
     delete tx_buffers;
     tx_buffers = NULL;
+  }
+  if (infiniband) {
+    delete infiniband;
+    infiniband = NULL;
   }
   free_tx_buffers.clear();
   workers.clear();
@@ -1068,6 +1066,33 @@ int InfRcMessenger::_bind(const entity_addr_t& bind_addr, const set<int>& avoid_
   return -1;
 }
 
+int InfRcMessenger::get_proto_version(int peer_type, bool connect)
+{
+  int my_type = my_inst.name.type();
+
+  // set reply protocol version
+  if (peer_type == my_type) {
+    // internal
+    return cluster_protocol;
+  } else {
+    // public
+    if (connect) {
+      switch (peer_type) {
+        case CEPH_ENTITY_TYPE_OSD: return CEPH_OSDC_PROTOCOL;
+        case CEPH_ENTITY_TYPE_MDS: return CEPH_MDSC_PROTOCOL;
+        case CEPH_ENTITY_TYPE_MON: return CEPH_MONC_PROTOCOL;
+      }
+    } else {
+      switch (my_type) {
+        case CEPH_ENTITY_TYPE_OSD: return CEPH_OSDC_PROTOCOL;
+        case CEPH_ENTITY_TYPE_MDS: return CEPH_MDSC_PROTOCOL;
+        case CEPH_ENTITY_TYPE_MON: return CEPH_MONC_PROTOCOL;
+      }
+    }
+  }
+  return 0;
+}
+
 /**
  * This method is invoked by the dispatcher when #server_setup_socket becomes
  * readable. It attempts to set up QueuePair with a connecting remote
@@ -1181,14 +1206,21 @@ void InfRcMessenger::handle_ping(entity_addr_t &addr, entity_addr_t &sendaddr)
   if (conn) {
     ldout(cct, 10) << __func__ << " got con ping message" << conn << dendl;
     if (conn->is_connected()) {
-      if (!send_udp_msg(server_setup_socket, INFRC_UDP_PONG, NULL, 0, sendaddr, get_myaddr()))
+      utime_t now = ceph_clock_now(cct);
+      struct ceph_timespec ts;
+      now.encode_timeval(&ts);
+      if (!send_udp_msg(server_setup_socket, INFRC_UDP_PONG, (char*)&ts, sizeof(ts), sendaddr, get_myaddr())) {
+        ldout(cct, 20) << __func__ << " send pong message successfully" << dendl;
         return ;
+      }
       ldout(cct, 0) << __func__ << " send pong message failed" << dendl;
     }
   }
 
   if (send_udp_msg(server_setup_socket, INFRC_UDP_BROKEN, NULL, 0, sendaddr, get_myaddr()) < 0)
     ldout(cct, 0) << __func__ << " send broken message failed" << dendl;
+  else
+    ldout(cct, 20) << __func__ << " send broken message successfully" << dendl;
 }
 
 void InfRcMessenger::learned_addr(const entity_addr_t &peer_addr_for_me)

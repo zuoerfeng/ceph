@@ -41,6 +41,12 @@ struct InfRcMsg {
     struct {
       Infiniband::ceph_queue_pair_tuple qpt;
     } __attribute__((packed)) boot;
+    struct {
+     ceph_timespec ts;
+    } __attribute__((packed)) ping;
+    struct {
+     ceph_timespec ts;
+    } __attribute__((packed)) pong;
   } payload;
   __u8 magic_code[8];
 } __attribute__((packed));
@@ -70,10 +76,11 @@ class InfRcConnection : public Connection {
   utime_t backoff;         // backoff time
   utime_t last_wakeup;
   utime_t last_ping;
-  utime_t last_pong;
   uint64_t out_seq, in_seq;
   int state;
   Messenger::Policy policy;
+  bool got_bad_auth;
+  AuthAuthorizer *authorizer;
   int client_setup_socket; // UDP socket for outgoing setup requests
   uint32_t exchange_count;
   uint32_t keepalive_retry;
@@ -199,7 +206,7 @@ class InfRcConnection : public Connection {
     local_deliver_handler.reset();
     wakeup_handler.reset();
   }
-  void process_request(bufferptr &bp);
+  void process_request(uint64_t qpn, bufferptr &bp);
   Infiniband::QueuePair* get_qp() {
     Mutex::Locker l(cm_lock);
     return qp;
@@ -207,7 +214,7 @@ class InfRcConnection : public Connection {
   void ack_message(ibv_wc &wc, Infiniband::BufferDescriptor *bd);
   bool replace(Infiniband::QueuePairTuple &incoming_qpt, Infiniband::QueuePairTuple &outgoing_qpt);
   void wakeup_writer() { center->dispatch_event_external(write_handler); }
-  bool send_pending_messages();
+  void send_pending_messages();
   void fault(bool onlive=false) {
     Mutex::Locker l(cm_lock);
     _fault(onlive);

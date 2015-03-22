@@ -27,6 +27,7 @@
 class InfRcWorker;
 
 class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
+  typedef Infiniband::QueuePair QueuePair;
   typedef Infiniband::BufferDescriptor BufferDescriptor;
   typedef Infiniband::RegisteredBuffers RegisteredBuffers;
 
@@ -81,8 +82,29 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
   // which results in a higher number of on-controller cache misses.
   uint32_t max_rx_buffers;
   uint32_t max_tx_buffers;
+  Mutex qp_to_worker_lock;          // protect `qp_to_worker`
+  ceph::unordered_map<uint64_t, uint64_t> qp_to_worker;
 
  public:
+  class ManagementThread : public Thread {
+    static const uint32_t MANAGEMENT_PERIOD = 5;
+    InfRcWorkerPool *pool;
+    CephContext *cct;
+    bool done;
+    Mutex stop_lock;
+    Cond stop_cond;
+
+   public:
+    ManagementThread(InfRcWorkerPool *p, CephContext *c): pool(p), cct(c), done(false),
+    stop_lock("InfRcWorkerPool::ManagementThread::stop_lock") {}
+    void *entry();
+    void stop() {
+      Mutex::Locker l(stop_lock);
+      done = true;
+      stop_cond.Signal();
+    }
+  } management_thread;
+
   // Since we always use at most 1 SGE per receive request, there is no need
   // to set this parameter any higher. In fact, larger values for this
   // parameter result in increased descriptor size, which means that the
@@ -157,6 +179,22 @@ class InfRcWorkerPool: public CephContext::AssociatedSingletonObject {
   ibv_srq* get_srq() { return srq; }
   uint32_t get_max_rx_buffers() const { return max_rx_buffers; }
   uint32_t get_max_tx_buffers() const { return max_tx_buffers; }
+  void register_qp_worker(uint64_t qpn, uint64_t id) {
+    Mutex::Locker l(qp_to_worker_lock);
+    assert(!qp_to_worker.count(qpn));
+    qp_to_worker[qpn] = id;
+  }
+  InfRcWorker* get_worker_by_qp(uint64_t qp) {
+    Mutex::Locker l(qp_to_worker_lock);
+    ceph::unordered_map<uint64_t, uint64_t>::iterator it = qp_to_worker.find(qp);
+    if (it == qp_to_worker.end())
+      return NULL;
+    return workers[it->second];
+  }
+  void erase_qp_worker(uint64_t qpn) {
+    Mutex::Locker l(qp_to_worker_lock);
+    qp_to_worker.erase(qpn);
+  }
 };
 
 
@@ -182,19 +220,24 @@ class InfRcWorker : public Thread {
   Infiniband *infiniband;
   CompletionQueue* rx_cq;           // completion queue for incoming requests
   CompletionQueue* tx_cq;           // common completion queue for all transmits
-  uint32_t rxcq_events_need_ack;
-  uint32_t txcq_events_need_ack;
   CompletionChannel* rx_cc;         // completion channel for incoming requests
   CompletionChannel* tx_cc;         // completion channel for all transmits
                                     // -1 means we're not a server
     /// true, specifying we haven't learned our addr; set false when we find it.
   // maybe this should be protected by the lock?
 
-  Mutex lock;                       // protect `oustanding_buffers`, `qp_conns`,
+  Mutex lock;                       // protect `outstanding_buffers`, `qp_conns`,
                                     // `dead_queue_pairs` whether to reap queue pair
 
   // RPCs which are awaiting their responses from the network.
   ceph::unordered_map<uint64_t, InfRcConnectionRef> outstanding_buffers;
+
+  /// if a queue pair is closed when transmit buffers are active
+  /// on it, the transmit buffers never get returned via tx_cq.  To
+  /// work around this problem, don't delete queue pairs immediately. Instead,
+  /// save them in this vector and delete them at a safe time, when there are
+  /// no outstanding transmit buffers to be lost.
+  vector<QueuePair*> dead_queue_pairs;
 
   // qp_num -> InfRcConnection
   // The main usage of `qp_conns` is looking up connection by qp_num,
@@ -210,12 +253,6 @@ class InfRcWorker : public Thread {
    * @param qp The qp needed to dead
    */
   ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> > qp_conns;
-  /// if a queue pair is closed when transmit buffers are active
-  /// on it, the transmit buffers never get returned via tx_cq.  To
-  /// work around this problem, don't delete queue pairs immediately. Instead,
-  /// save them in this vector and delete them at a safe time, when there are
-  /// no outstanding transmit buffers to be lost.
-  vector<QueuePair*> dead_queue_pairs;
 
   uint64_t low_level_rx_buffers;
 
@@ -254,6 +291,34 @@ class InfRcWorker : public Thread {
   int get_lid() { return pool->get_lid(); }
   BufferDescriptor* get_message_buffer(InfRcConnectionRef conn);
   void put_message_buffer(BufferDescriptor *bd);
+  QueuePair* get_new_qp() {
+    QueuePair *qp = infiniband->create_queue_pair(IBV_QPT_RC, pool->get_ib_physical_port(),
+                                                  pool->get_srq(), tx_cq->get_cq(), rx_cq->get_cq(),
+                                                  pool->get_max_tx_buffers(),
+                                                  pool->get_max_rx_buffers());
+    return qp;
+  }
+  void register_qp(QueuePair *qp, InfRcConnectionRef conn) {
+    Mutex::Locker l(lock);
+    assert(!qp_conns.count(qp->get_local_qp_number()));
+    qp_conns[qp->get_local_qp_number()] = make_pair(qp, conn);
+    pool->register_qp_worker(qp->get_local_qp_number(), id);
+  }
+  InfRcConnectionRef get_conn_by_qp(uint64_t qp) {
+    Mutex::Locker l(lock);
+    ceph::unordered_map<uint64_t, pair<QueuePair*, InfRcConnectionRef> >::iterator it = qp_conns.find(qp);
+    if (it == qp_conns.end())
+      return NULL;
+    return it->second.second;
+  }
+  void erase_qpn(uint64_t qpn) {
+    Mutex::Locker l(lock);
+    if (!qp_conns.count(qpn))
+      return ;
+    dead_queue_pairs.push_back(qp_conns[qpn].first);
+    qp_conns.erase(qpn);
+    pool->erase_qp_worker(qpn);
+  }
 };
 
 

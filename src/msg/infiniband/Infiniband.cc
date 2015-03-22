@@ -315,8 +315,7 @@ Infiniband::QueuePair::QueuePair(Infiniband& infiniband, ibv_qp_type type,
       initial_psn(0),
       max_send_wr(max_send_wr),
       max_recv_wr(max_recv_wr),
-      q_key(q_key),
-      dead(false)
+      q_key(q_key)
 {
   get_random_bytes((char*)&initial_psn, sizeof(initial_psn));
   if (type != IBV_QPT_RC && type != IBV_QPT_UD && type != IBV_QPT_RAW_PACKET) {
@@ -505,8 +504,6 @@ int Infiniband::QueuePair::plumb(QueuePairTuple *qpt)
  */
 int Infiniband::QueuePair::to_reset()
 {
-  assert(!dead);
-
   ibv_qp_attr qpa;
   memset(&qpa, 0, sizeof(qpa));
   qpa.qp_state = IBV_QPS_RESET;
@@ -572,9 +569,6 @@ int Infiniband::QueuePair::to_reset()
  */
 int Infiniband::QueuePair::to_dead()
 {
-  assert(!dead);
-  dead = true;
-
   ibv_qp_attr qpa;
   memset(&qpa, 0, sizeof(qpa));
   qpa.qp_state = IBV_QPS_ERR;
@@ -673,6 +667,7 @@ int Infiniband::CompletionQueue::init()
     return -1;
   }
 
+  channel->bind_cq(cq);
   ldout(infiniband.cct, 20) << __func__ << " successfully create cq=" << cq << dendl;
   return 0;
 }

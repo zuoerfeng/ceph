@@ -41,6 +41,8 @@ class Infiniband {
     __u8     host_type; \
     __le32   global_seq; \
     __le32   connect_seq; \
+    __le32   authorizer_protocol; \
+    __le32   authorizer_len; \
     __le64   msg_seq; \
     ceph_entity_addr addr; \
     ceph_entity_addr peer_addr;
@@ -54,16 +56,16 @@ class Infiniband {
   class QueuePairTuple {
    public:
     QueuePairTuple() : qpn(0), psn(0), features(0), lid(0), tag(0), host_type(0),
-                       global_seq(0), connect_seq(0), msg_seq(0) {
+                       global_seq(0), connect_seq(0), authorizer_protocol(0), msg_seq(0) {
     }
     QueuePairTuple(uint16_t lid, uint32_t qpn, uint32_t psn, uint64_t f,
-                   uint8_t tag, uint8_t t, uint32_t gseq, uint32_t cseq, uint64_t mseq,
-                   const entity_addr_t &s, const entity_addr_t &r)
-      : qpn(qpn), psn(psn), features(f), lid(lid), tag(tag), host_type(t),
-        global_seq(gseq), connect_seq(cseq), msg_seq(mseq) {
+                   uint8_t tag, uint8_t t, uint32_t gseq, uint32_t cseq, uint32_t auproto, uint32_t au_len,
+                   uint64_t mseq, const entity_addr_t &s, const entity_addr_t &r)
+      : qpn(qpn), psn(psn), features(f), lid(lid), tag(tag), host_type(t), global_seq(gseq),
+        connect_seq(cseq), authorizer_protocol(auproto), authorizer_len(au_len), msg_seq(mseq) {
       set_sender_addr(s);
       set_recevier_addr(r);
-      assert(sizeof(QueuePairTuple) == 36+2*sizeof(ceph_entity_addr));
+      assert(sizeof(QueuePairTuple) == 44+2*sizeof(ceph_entity_addr));
     }
     __le16 get_lid() const { return lid; }
     __le32 get_qpn() const { return qpn; }
@@ -78,6 +80,8 @@ class Infiniband {
     void     set_features(uint64_t f) { features = f; }
     void set_global_seq(uint32_t s) { global_seq = s; }
     void set_connect_seq(uint32_t s) { connect_seq = s; }
+    __le32   get_authorizer_protocol() const { return authorizer_protocol; }
+    __le32   get_authorizer_len() const { return authorizer_len; }
     void set_msg_seq(uint64_t s) { msg_seq = s; }
     const entity_addr_t get_sender_addr() const { return entity_addr_t(addr); }
     const entity_addr_t get_receiver_addr() const { return entity_addr_t(peer_addr); }
@@ -209,7 +213,7 @@ class Infiniband {
     explicit QueuePair(Infiniband& infiniband):
       infiniband(infiniband), type(IBV_QPT_RC), ctxt(NULL), ib_physical_port(-1),
       pd(NULL), srq(NULL), qp(NULL), txcq(NULL), rxcq(NULL),
-      initial_psn(-1), dead(false) {}
+      initial_psn(-1) {}
     ~QueuePair();
 
     int init();
@@ -298,7 +302,6 @@ class Infiniband {
     int plumb(QueuePairTuple *qpt);
     int to_reset();
     int to_dead();
-    bool is_dead() { return dead; }
 
    private:
     Infiniband&  infiniband;     // Infiniband to which this QP belongs
@@ -314,23 +317,28 @@ class Infiniband {
     uint32_t     max_send_wr;
     uint32_t     max_recv_wr;
     uint32_t     q_key;
-    bool         dead;
   };
 
   class CompletionChannel {
    public:
-    CompletionChannel(Infiniband &ib): infiniband(ib), channel(NULL), cq_events_that_need_ack(0) {}
+    CompletionChannel(Infiniband &ib): infiniband(ib), channel(NULL), cq(NULL), cq_events_that_need_ack(0) {}
     ~CompletionChannel();
     int init();
     bool get_cq_event();
     int get_fd() { return channel->fd; }
     ibv_comp_channel* get_channel() { return channel; }
+    void bind_cq(ibv_cq *c) { cq = c; }
+    void ack_events() {
+      ibv_ack_cq_events(cq, cq_events_that_need_ack);
+      cq_events_that_need_ack = 0;
+    }
 
    private:
     static const uint32_t MAX_ACK_EVENT = 128;
     Infiniband& infiniband;
     ibv_comp_channel *channel;
-    uint32_t      cq_events_that_need_ack;
+    ibv_cq *cq;
+    uint32_t cq_events_that_need_ack;
   };
   // this class encapsulates the creation, use, and destruction of an RC
   // completion queue.
@@ -410,7 +418,7 @@ class Infiniband {
         assert(0);
       }
 
-      ibv_mr *mr = ibv_reg_mr(pd->pd, base_pointer, bytes,
+      mr = ibv_reg_mr(pd->pd, base_pointer, bytes,
                               IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_LOCAL_WRITE);
       if (mr == NULL) {
         lderr(cct) << __func__ << " failed to register buffer" << dendl;
@@ -426,7 +434,11 @@ class Infiniband {
       }
     }
 
-    ~RegisteredBuffers() { free(base_pointer); delete descriptors; }
+    ~RegisteredBuffers() {
+      assert(!ibv_dereg_mr(mr));
+      delete descriptors;
+      free(base_pointer);
+    }
 
     /**
      * Get the BufferDescriptor associated with the buffer that #buffer
@@ -474,6 +486,8 @@ class Infiniband {
 
     /// BufferDescriptors for each of the buffers.
     BufferDescriptor* descriptors;
+    // memory region of the buffer
+    ibv_mr* mr;
   };
 
   QueuePair* create_queue_pair(ibv_qp_type type, int ib_physical_port,

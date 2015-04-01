@@ -146,7 +146,7 @@ InfRcConnection::InfRcConnection(CephContext *c, InfRcMessenger *m, InfRcWorker 
     cm_lock("InfRcConnection::cm_lock"), global_seq(0), connect_seq(0),
     out_seq(0), in_seq(0), state(STATE_NEW), got_bad_auth(false), authorizer(NULL),
     client_setup_socket(-1), exchange_count(0),
-    keepalive_retry(0), pending_msg(NULL), data_left(0), infrc_msgr(m)
+    keepalive_retry(0), pending_msg(NULL), receive_stage(HEADER), cur_stage_left(0), infrc_msgr(m)
 {
   set_peer_type(type);
   set_peer_addr(addr);
@@ -587,9 +587,9 @@ int InfRcConnection::send_zero_copy_msg(Message *m, Infiniband::BufferDescriptor
                              << m->get_middle().length() << " + " << m->get_data().length()
                              << " byte message" << dendl;
   bl.append((char*)&header, sizeof(header));
+  bl.append((char*)&footer, sizeof(footer));
   bl.append(m->get_payload());
   bl.append(m->get_middle());
-  bl.append((char*)&footer, sizeof(footer));
   bl.append(m->get_data());
 
   int r = send_zero_copy(bl, bd, m, INFRC_MSG_FIRST);
@@ -1041,6 +1041,7 @@ void InfRcConnection::process_request(uint64_t qpn, bufferptr &bp)
     front.clear();
     middle.clear();
     data_bl.clear();
+    receive_stage = FRONT;
     rcv_header = *reinterpret_cast<ceph_msg_header*>(bp.c_str()+offset);
     ldout(infrc_msgr->cct, 20) << __func__ << " got header type=" << rcv_header.type
                                << " src " << entity_name_t(rcv_header.src)
@@ -1048,28 +1049,50 @@ void InfRcConnection::process_request(uint64_t qpn, bufferptr &bp)
                                << " middle=" << rcv_header.middle_len
                                << " data=" << rcv_header.data_len
                                << " off " << rcv_header.data_off << dendl;
-
-    assert(rcv_header.front_len + rcv_header.middle_len + sizeof(ceph_msg_header) + sizeof(ceph_msg_footer) <= bp.length());
     offset += sizeof(ceph_msg_header);
-    front.append(bp, offset, rcv_header.front_len);
-    offset += rcv_header.front_len;
-    middle.append(bp, offset, rcv_header.middle_len);
-    offset += rcv_header.middle_len;
     rcv_footer = *reinterpret_cast<ceph_msg_footer*>(bp.c_str()+offset);
     offset += sizeof(ceph_msg_footer);
-    data_left = rcv_header.data_len;
+    cur_stage_left = rcv_header.front_len;
+    receive_stage = FRONT;
   } else {
     assert(tag == INFRC_MSG_CONTINUE);
-    assert(data_left);
   }
 
-  copied = MIN(data_left, bp.length()-offset);
-  data_bl.append(bp, offset, copied);
-  data_left -= copied;
-
-  if (data_left) {
-    ldout(infrc_msgr->cct, 20) << __func__ << " got partial buffer(" << bp.length() << "), left "
-                               << data_left << dendl;
+  while (offset != bp.length() && receive_stage != END) {
+    copied = MIN(cur_stage_left, bp.length()-offset);
+    cur_stage_left -= copied
+    switch (receive_stage) {
+      case FRONT:
+        front.append(bp, offset, copied);
+        if (!cur_stage_left) {
+          cur_stage_left = rcv_header.middle_len;
+          receive_stage = MIDDLE;
+        }
+        break;
+      case MIDDLE:
+        middle.append(bp, offset, copied);
+        if (!cur_stage_left) {
+          cur_stage_left = rcv_header.data_len;
+          receive_stage = DATA;
+        }
+        break;
+      case DATA:
+        data_bl.append(bp, offset, copied);
+        if (!cur_stage_left) {
+          cur_stage_left = sizeof(ceph_msg_footer);
+          receive_stage = END;
+        }
+        break;
+      case END:
+        break;
+      default:
+        assert(0);
+    }
+    offset += copied;
+  }
+  if (receive_stage != END) {
+    ldout(infrc_msgr->cct, 20) << __func__ << " got partial buffer(" << bp.length() << "), cur stage="
+                               << receive_stage << " cur left " << cur_stage_left << dendl;
     return ;
   }
 

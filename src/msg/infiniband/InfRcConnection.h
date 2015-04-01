@@ -92,16 +92,16 @@ class InfRcConnection : public Connection {
   Message *pending_msg;
   list<pair<uint64_t, Message*> > sent_queue;
 
-  enum {
-    FRONT,
-    MIDDLE,
-    DATA,
-    END
-  } receive_stage;
-  uint64_t cur_stage_left;
+  #define FRONT 0
+  #define MIDDLE 1
+  #define DATA 2
+  #define END 3
+  int receive_stage;
+  // front, middle, data
+  uint64_t stage_left[3];
+  bufferlist stage_bl[3];
   ceph_msg_header rcv_header;
   ceph_msg_footer rcv_footer;
-  bufferlist front, middle, data_bl;
 
   enum {
     STATE_NEW,

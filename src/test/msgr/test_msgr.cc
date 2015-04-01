@@ -1347,6 +1347,7 @@ int main(int argc, char **argv) {
   g_ceph_context->_conf->set_val("ms_die_on_bad_msg", "true");
   g_ceph_context->_conf->set_val("ms_die_on_old_message", "true");
   g_ceph_context->_conf->set_val("ms_max_backoff", "1");
+  g_ceph_context->_conf->set_val("ms_infiniband_buffer_len", "1<<21");
   common_init_finish(g_ceph_context);
 
   ::testing::InitGoogleTest(&argc, argv);

@@ -146,7 +146,7 @@ InfRcConnection::InfRcConnection(CephContext *c, InfRcMessenger *m, InfRcWorker 
     cm_lock("InfRcConnection::cm_lock"), global_seq(0), connect_seq(0),
     out_seq(0), in_seq(0), state(STATE_NEW), got_bad_auth(false), authorizer(NULL),
     client_setup_socket(-1), exchange_count(0),
-    keepalive_retry(0), pending_msg(NULL), receive_stage(HEADER), cur_stage_left(0), infrc_msgr(m)
+    keepalive_retry(0), pending_msg(NULL), receive_stage(END), infrc_msgr(m)
 {
   set_peer_type(type);
   set_peer_addr(addr);
@@ -597,15 +597,6 @@ int InfRcConnection::send_zero_copy_msg(Message *m, Infiniband::BufferDescriptor
     assert(!pending_bl.length());
     bl.swap(pending_bl);
     center->dispatch_event_external(write_handler);
-    ldout(infrc_msgr->cct, 20) << __func__ << " partial post seq=" << m->get_seq() << " qpn="
-                               << qp->get_local_qp_number() << " bd=" << reinterpret_cast<uint64_t>(bd)
-                               << " message(" << *m << ")" << dendl;
-  } else if (r == 0) {
-    ldout(infrc_msgr->cct, 20) << __func__ << " successfully post seq=" << m->get_seq() << " qpn="
-                               << qp->get_local_qp_number() << " bd=" << reinterpret_cast<uint64_t>(bd)
-                               << " message(" << *m << ")" << dendl;
-  } else {
-    ldout(infrc_msgr->cct, 1) << __func__ << " failed to send message " << m << dendl;
   }
 
   return r;
@@ -734,8 +725,9 @@ int InfRcConnection::send_zero_copy(bufferlist &bl, Infiniband::BufferDescriptor
   //}
 
   if (ibv_post_send(qp->get_qp(), &tx_work_request, &bad_tx_work_request)) {
-    lderr(infrc_msgr->cct) << __func__ << " ibv_post_send failed(most probably should be peer not ready): "
-               << cpp_strerror(errno) << dendl;
+    lderr(infrc_msgr->cct) << __func__ << " failed to send message=" << m
+                           << " ibv_post_send failed(most probably should be peer not ready): "
+                           << cpp_strerror(errno) << dendl;
     return -1;
   }
 
@@ -753,9 +745,15 @@ int InfRcConnection::send_zero_copy(bufferlist &bl, Infiniband::BufferDescriptor
       pending_msg = m;
       pending_msg->get();
     }
+    ldout(infrc_msgr->cct, 20) << __func__ << " partial post seq=" << m->get_seq() << " qpn="
+                               << qp->get_local_qp_number() << " bd=" << reinterpret_cast<uint64_t>(bd)
+                               << " message(" << *m << ")" << dendl;
     return 1;
   }
 
+  ldout(infrc_msgr->cct, 20) << __func__ << " successfully post seq=" << m->get_seq() << " qpn="
+                             << qp->get_local_qp_number() << " bd=" << reinterpret_cast<uint64_t>(bd)
+                             << " message(" << *m << ")" << dendl;
   // release message if completed and we don't queue it
   if (policy.lossy)
     m->put();
@@ -1038,10 +1036,9 @@ void InfRcConnection::process_request(uint64_t qpn, bufferptr &bp)
   ldout(infrc_msgr->cct, 20) << __func__ << " tag=" << tag << ": " << bp << dendl;
   if (tag == INFRC_MSG_FIRST) {
     // new message
-    front.clear();
-    middle.clear();
-    data_bl.clear();
-    receive_stage = FRONT;
+    stage_bl[0].clear();
+    stage_bl[1].clear();
+    stage_bl[2].clear();
     rcv_header = *reinterpret_cast<ceph_msg_header*>(bp.c_str()+offset);
     ldout(infrc_msgr->cct, 20) << __func__ << " got header type=" << rcv_header.type
                                << " src " << entity_name_t(rcv_header.src)
@@ -1052,53 +1049,36 @@ void InfRcConnection::process_request(uint64_t qpn, bufferptr &bp)
     offset += sizeof(ceph_msg_header);
     rcv_footer = *reinterpret_cast<ceph_msg_footer*>(bp.c_str()+offset);
     offset += sizeof(ceph_msg_footer);
-    cur_stage_left = rcv_header.front_len;
+    stage_left[0] = rcv_header.front_len;
+    stage_left[1] = rcv_header.middle_len;
+    stage_left[2] = rcv_header.data_len;
     receive_stage = FRONT;
   } else {
     assert(tag == INFRC_MSG_CONTINUE);
   }
 
-  while (offset != bp.length() && receive_stage != END) {
-    copied = MIN(cur_stage_left, bp.length()-offset);
-    cur_stage_left -= copied
-    switch (receive_stage) {
-      case FRONT:
-        front.append(bp, offset, copied);
-        if (!cur_stage_left) {
-          cur_stage_left = rcv_header.middle_len;
-          receive_stage = MIDDLE;
-        }
+  while (receive_stage != END) {
+    if (stage_left[receive_stage]) {
+      if (offset == bp.length())
         break;
-      case MIDDLE:
-        middle.append(bp, offset, copied);
-        if (!cur_stage_left) {
-          cur_stage_left = rcv_header.data_len;
-          receive_stage = DATA;
-        }
-        break;
-      case DATA:
-        data_bl.append(bp, offset, copied);
-        if (!cur_stage_left) {
-          cur_stage_left = sizeof(ceph_msg_footer);
-          receive_stage = END;
-        }
-        break;
-      case END:
-        break;
-      default:
-        assert(0);
+      copied = MIN(stage_left[receive_stage], bp.length()-offset);
+      stage_left[receive_stage] -= copied;
+      stage_bl[receive_stage].append(bp, offset, copied);
+      offset += copied;
     }
-    offset += copied;
+    if (!stage_left[receive_stage])
+      receive_stage++;
   }
   if (receive_stage != END) {
     ldout(infrc_msgr->cct, 20) << __func__ << " got partial buffer(" << bp.length() << "), cur stage="
-                               << receive_stage << " cur left " << cur_stage_left << dendl;
+                               << receive_stage << " cur left " << stage_left[receive_stage] << dendl;
     return ;
   }
 
-  ldout(infrc_msgr->cct, 20) << __func__ << " got " << front.length() << " + " << middle.length()
-                              << " + " << data_bl.length() << " byte message" << dendl;
-  Message *message = decode_message(infrc_msgr->cct, 0, rcv_header, rcv_footer, front, middle, data_bl);
+  ldout(infrc_msgr->cct, 20) << __func__ << " got " << stage_bl[0].length() << " + " << stage_bl[1].length()
+                              << " + " << stage_bl[2].length() << " byte message" << dendl;
+  Message *message = decode_message(infrc_msgr->cct, 0, rcv_header, rcv_footer, stage_bl[0], stage_bl[1],
+                                    stage_bl[2]);
   if (!message) {
     ldout(infrc_msgr->cct, 1) << __func__ << " decode message failed, dropped" << dendl;
     return ;

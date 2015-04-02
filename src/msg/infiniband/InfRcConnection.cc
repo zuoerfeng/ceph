@@ -186,7 +186,7 @@ void InfRcConnection::send_keepalive()
 
   ldout(infrc_msgr->cct, 20) << __func__ << dendl;
   utime_t now = ceph_clock_now(infrc_msgr->cct);
-  if (!sent_queue.empty() || in_queue() || (now - last_ping).to_msec() < KEEPALIVE_MIN_PREIOD_MS) {
+  if (in_queue() || (now - last_ping).to_msec() < KEEPALIVE_MIN_PREIOD_MS) {
     ldout(infrc_msgr->cct, 10) << __func__ << " connection has job or just sent before, no need to detect alive" << dendl;
     return ;
   }
@@ -542,7 +542,7 @@ int InfRcConnection::send_message(Message *m)
   } else if (state == STATE_CLOSED) {
     ldout(infrc_msgr->cct, 1) << __func__ << " connection already stopped: " << *m << dendl;
     m->put();
-    return -1;
+    return 0;
   } else if (infrc_msgr->get_myaddr() == peer_addr) {
     ldout(infrc_msgr->cct, 20) << __func__ << " local dispatch " << *m << dendl;
     local_messages.push_back(m);
@@ -592,7 +592,7 @@ int InfRcConnection::send_zero_copy_msg(Message *m, Infiniband::BufferDescriptor
                              << m->get_middle().length() << " + " << m->get_data().length()
                              << " byte message" << dendl;
   bl.append((char*)&header, sizeof(header));
-  bl.append((char*)&InfRcMsgPayload, sizeof(payload));
+  bl.append((char*)&payload, sizeof(payload));
   bl.append((char*)&footer, sizeof(footer));
   bl.append(m->get_payload());
   bl.append(m->get_middle());
@@ -1022,7 +1022,7 @@ Infiniband::QueuePairTuple InfRcConnection::build_qp_tuple()
   Infiniband::QueuePairTuple t(worker->get_lid(), qp->get_local_qp_number(), qp->get_initial_psn(),
                                policy.features_supported, CEPH_MSGR_TAG_READY,
                                infrc_msgr->get_myinst().name.type(),
-                               global_seq, connect_seq, in_seq, 0, 0,
+                               global_seq, connect_seq, 0, 0, in_seq,
                                infrc_msgr->get_myaddr(), peer_addr);
   return t;
 }
@@ -1148,9 +1148,15 @@ void InfRcConnection::handle_ack(uint64_t seq)
 void InfRcConnection::ack_message(ibv_wc &wc, Infiniband::BufferDescriptor *bd)
 {
   Mutex::Locker l(cm_lock);
-  if (state != STATE_OPEN) {
-    ldout(infrc_msgr->cct, 0) << __func__ << " current state is " << get_state_name(state) << ", discard ack bd="
+  if (state == STATE_CLOSED) {
+    ldout(infrc_msgr->cct, 0) << __func__ << " connection is down, discard ack bd="
                               << bd << dendl;
+    return ;
+  }
+
+  if (!qp || wc.qp_num != qp->get_local_qp_number()) {
+    ldout(infrc_msgr->cct, 0) << __func__ << " missing qp or incorrect qp=" << wc.qp_num
+                              << " discard ack bd=" << bd << dendl;
     return ;
   }
 

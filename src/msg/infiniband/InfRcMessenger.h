@@ -465,6 +465,8 @@ class InfRcMessenger : public SimplePolicyMessenger {
 
   Mutex lock;
   ceph::unordered_map<entity_addr_t, InfRcConnectionRef> connections;
+  Mutex gseq_lock;
+  ceph::unordered_map<entity_addr_t, uint64_t> connection_min_gseqs;
 
   Mutex deleted_lock;
   set<InfRcConnectionRef> deleted_conns;
@@ -544,8 +546,14 @@ class InfRcMessenger : public SimplePolicyMessenger {
    * initiative to unregister
    */
   void unregister_conn(InfRcConnectionRef conn) {
-    Mutex::Locker l(deleted_lock);
-    deleted_conns.insert(conn);
+    {
+      Mutex::Locker l(deleted_lock);
+      deleted_conns.insert(conn);
+    }
+    {
+      Mutex::Locker l(gseq_lock);
+      connection_min_gseqs[conn->get_peer_addr()] = conn->get_global_seq();
+    }
   }
 
   void accept(Infiniband::QueuePairTuple &incoming_qpt, entity_addr_t &socket_addr);

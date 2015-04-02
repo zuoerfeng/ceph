@@ -736,6 +736,7 @@ InfRcMessenger::InfRcMessenger(CephContext *cct, entity_name_t name,
   : SimplePolicyMessenger(cct, name, mname, _nonce), started(false), stopped(true),
     server_setup_socket(-1), nonce(_nonce), need_addr(true), cluster_protocol(0),
     global_seq(0), lock("InfRcMessenger::lock"), deleted_lock("InfRcMessenger::deleted_lock"),
+    gseq_lock("InfRcMessenger::gseq_lock"),
     server_setup_worker(NULL)
 {
   ceph_spin_init(&global_seq_lock);
@@ -1160,6 +1161,11 @@ void InfRcMessenger::accept(Infiniband::QueuePairTuple &incoming_qpt, entity_add
   } else {
     Mutex::Locker l(lock);
     InfRcConnectionRef conn = _lookup_conn(incoming_qpt.get_sender_addr());
+    ceph::unordered_map<entity_addr_t, uint64_t>::iterator it;
+    {
+      Mutex::Locker l(gseq_lock);
+      it = connection_min_gseqs.find(incoming_qpt.get_sender_addr());
+    }
     if (conn) {
       if (!conn->replace(incoming_qpt, outgoing_qpt))
         return;
@@ -1169,6 +1175,12 @@ void InfRcMessenger::accept(Infiniband::QueuePairTuple &incoming_qpt, entity_add
                     << incoming_qpt.get_connect_seq() << "), sending RESETSESSION"
                     << dendl;
       outgoing_qpt.set_tag(CEPH_MSGR_TAG_RESETSESSION);
+    } else if (it != connection_min_gseqs.end() &&
+               incoming_qpt.get_global_seq() <= it->second) {
+      outgoing_qpt.set_tag(CEPH_MSGR_TAG_RETRY_GLOBAL);
+      outgoing_qpt.set_global_seq(it->second);
+      ldout(cct, 1) << __func__ << " receive older global gseq=" << incoming_qpt.get_global_seq()
+                                << " existing min gseq=" << it->second << ", let peer retry." << dendl;
     } else {
       // new session
       ldout(cct, 10) << __func__ << " accept new session" << dendl;
@@ -1222,7 +1234,7 @@ void InfRcMessenger::handle_ping(entity_addr_t &addr, entity_addr_t &sendaddr)
     }
   }
 
-  if (send_udp_msg(server_setup_socket, INFRC_UDP_BROKEN, &gid, sizeof(gid), sendaddr, get_myaddr()) < 0)
+  if (send_udp_msg(server_setup_socket, INFRC_UDP_BROKEN, (char*)&gid, sizeof(gid), sendaddr, get_myaddr()) < 0)
     ldout(cct, 0) << __func__ << " send broken message failed" << dendl;
   else
     ldout(cct, 20) << __func__ << " send broken message(gid=" << gid << ") successfully" << dendl;

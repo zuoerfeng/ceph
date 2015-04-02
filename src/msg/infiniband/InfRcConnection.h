@@ -168,7 +168,7 @@ class InfRcConnection : public Connection {
         last_msg = *it;
         pending_send.insert(pending_send.begin(), last_msg);
       } else {
-        it->put();
+        (*it)->put();
       }
     }
     sent_queue.clear();

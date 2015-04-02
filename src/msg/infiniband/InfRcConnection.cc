@@ -411,8 +411,10 @@ void InfRcConnection::process()
             last_keepalive_ack = utime_t(msg.payload.pong.ts);
             keepalive_retry = 0;
           } else if (msg.tag == INFRC_UDP_BROKEN) {
-            ldout(infrc_msgr->cct, 10) << " got peer broken message." << dendl;
-            _fault(true);
+            if (msg.payload.broken.gid == global_seq || msg.payload.broken.gid == 0) {
+              ldout(infrc_msgr->cct, 10) << " got peer broken message." << dendl;
+              _fault(true);
+            }
           }
 
         }
@@ -581,12 +583,16 @@ int InfRcConnection::send_zero_copy_msg(Message *m, Infiniband::BufferDescriptor
   bufferlist bl;
   // prepare everything
   ceph_msg_header& header = m->get_header();
+  InfRcMsgPayload payload;
+  payload.seq_acked = in_seq;
+  payload.version = 1;
   ceph_msg_footer& footer = m->get_footer();
 
   ldout(infrc_msgr->cct, 20) << __func__ << " sending " << m->get_payload().length() << " + "
                              << m->get_middle().length() << " + " << m->get_data().length()
                              << " byte message" << dendl;
   bl.append((char*)&header, sizeof(header));
+  bl.append((char*)&InfRcMsgPayload, sizeof(payload));
   bl.append((char*)&footer, sizeof(footer));
   bl.append(m->get_payload());
   bl.append(m->get_middle());
@@ -732,7 +738,7 @@ int InfRcConnection::send_zero_copy(bufferlist &bl, Infiniband::BufferDescriptor
   }
 
   if (!policy.lossy)
-    sent_queue.push_back(make_pair(reinterpret_cast<uint64_t>(bd), m));
+    sent_queue.push_back(m);
 
   if (sent != bl.length()) {
     // unfinished bl
@@ -1047,6 +1053,8 @@ void InfRcConnection::process_request(uint64_t qpn, bufferptr &bp)
                                << " data=" << rcv_header.data_len
                                << " off " << rcv_header.data_off << dendl;
     offset += sizeof(ceph_msg_header);
+    recv_infrc_payload = *reinterpret_cast<InfRcMsgPayload*>(bp.c_str()+offset);
+    offset += sizeof(recv_infrc_payload);
     rcv_footer = *reinterpret_cast<ceph_msg_footer*>(bp.c_str()+offset);
     offset += sizeof(ceph_msg_footer);
     stage_left[0] = rcv_header.front_len;
@@ -1120,6 +1128,21 @@ void InfRcConnection::process_request(uint64_t qpn, bufferptr &bp)
     center->dispatch_event_external(
         EventCallbackRef(new C_infrc_handle_dispatch(infrc_msgr, message)));
   }
+  handle_ack(recv_infrc_payload.seq_acked);
+}
+
+void InfRcConnection::handle_ack(uint64_t seq)
+{
+  ldout(infrc_msgr->cct, 15) << __func__ << " got ack seq " << seq << dendl;
+  // trim sent list
+  while (!sent_queue.empty() && sent_queue.front()->get_seq() <= seq) {
+    Message *m = sent_queue.front();
+    sent_queue.pop_front();
+    ldout(infrc_msgr->cct, 20) << __func__ << " reader got ack seq "
+                               << seq << " >= " << m->get_seq() << " on "
+                               << m << " " << *m << dendl;
+    m->put();
+  }
 }
 
 void InfRcConnection::ack_message(ibv_wc &wc, Infiniband::BufferDescriptor *bd)
@@ -1144,17 +1167,6 @@ void InfRcConnection::ack_message(ibv_wc &wc, Infiniband::BufferDescriptor *bd)
                              << infiniband->wc_status_to_string(wc.status) << dendl;
     }
     _fault();
-  } else if (!sent_queue.empty()) {
-    pair<uint64_t, Message*> p = sent_queue.front();
-    Message *m = p.second;
-    if (p.first != reinterpret_cast<uint64_t>(bd)) {
-      ldout(infrc_msgr->cct, 1) << __func__ << " it should be a reset for qp, dropping message " << m << dendl;
-      return ;
-    }
-    ldout(infrc_msgr->cct, 20) << __func__ << " m=" << m << " seq=" << m->get_seq()
-                               << " bd=" << wc.wr_id << dendl;
-    sent_queue.pop_front();
-    m->put();
   }
 }
 

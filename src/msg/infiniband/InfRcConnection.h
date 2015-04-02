@@ -47,12 +47,20 @@ struct InfRcMsg {
     struct {
      ceph_timespec ts;
     } __attribute__((packed)) pong;
+    struct {
+      __le64 gid;
+    } __attribute__((packed)) broken;
   } payload;
   __u8 magic_code[8];
 } __attribute__((packed));
 
 #define INFRC_MSG_FIRST 1 << 1
 #define INFRC_MSG_CONTINUE 1 << 2
+
+struct InfRcMsgPayload {
+  __le64 seq_acked;
+  __le16 version;
+} __attribute__ ((packed));
 
 class InfRcConnection : public Connection {
   // With 64 KB seglets 1 MB is fractured into 16 or 17 pieces, plus we
@@ -90,7 +98,7 @@ class InfRcConnection : public Connection {
 
   bufferlist pending_bl;
   Message *pending_msg;
-  list<pair<uint64_t, Message*> > sent_queue;
+  list<Message*> sent_queue;
 
   #define FRONT 0
   #define MIDDLE 1
@@ -101,6 +109,7 @@ class InfRcConnection : public Connection {
   uint64_t stage_left[3];
   bufferlist stage_bl[3];
   ceph_msg_header rcv_header;
+  InfRcMsgPayload recv_infrc_payload;
   ceph_msg_footer rcv_footer;
 
   enum {
@@ -153,13 +162,13 @@ class InfRcConnection : public Connection {
       pending_msg = NULL;
       pending_bl.clear();
     }
-    for (list<pair<uint64_t, Message*> >::reverse_iterator it = sent_queue.rbegin();
+    for (list<Message*>::reverse_iterator it = sent_queue.rbegin();
          it != sent_queue.rend(); ++it) {
-      if (last_msg != it->second) {
-        last_msg = it->second;
+      if (last_msg != *it) {
+        last_msg = *it;
         pending_send.insert(pending_send.begin(), last_msg);
       } else {
-        it->second->put();
+        it->put();
       }
     }
     sent_queue.clear();
@@ -217,6 +226,7 @@ class InfRcConnection : public Connection {
     Mutex::Locker l(cm_lock);
     return qp;
   }
+  void handle_ack(uint64_t seq);
   void ack_message(ibv_wc &wc, Infiniband::BufferDescriptor *bd);
   bool replace(Infiniband::QueuePairTuple &incoming_qpt, Infiniband::QueuePairTuple &outgoing_qpt);
   void wakeup_writer() { center->dispatch_event_external(write_handler); }
@@ -225,6 +235,7 @@ class InfRcConnection : public Connection {
     Mutex::Locker l(cm_lock);
     _fault(onlive);
   }
+  uint64_t get_global_seq() const { return global_seq; }
 };
 
 typedef boost::intrusive_ptr<InfRcConnection> InfRcConnectionRef;

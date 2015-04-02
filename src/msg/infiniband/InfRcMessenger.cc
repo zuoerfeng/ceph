@@ -1202,9 +1202,10 @@ void InfRcMessenger::accept(Infiniband::QueuePairTuple &incoming_qpt, entity_add
 void InfRcMessenger::handle_ping(entity_addr_t &addr, entity_addr_t &sendaddr)
 {
   Mutex::Locker l(lock);
+  uint64_t gid = 0;
   InfRcConnectionRef conn = _lookup_conn(addr);
   if (conn) {
-    ldout(cct, 10) << __func__ << " got con ping message" << conn << dendl;
+    ldout(cct, 10) << __func__ << " got con(" << conn << ") ping message" << dendl;
     if (conn->is_connected()) {
       utime_t now = ceph_clock_now(cct);
       struct ceph_timespec ts;
@@ -1214,13 +1215,17 @@ void InfRcMessenger::handle_ping(entity_addr_t &addr, entity_addr_t &sendaddr)
         return ;
       }
       ldout(cct, 0) << __func__ << " send pong message failed" << dendl;
+    } else {
+      gid = conn->get_global_seq();
+      ldout(cct, 10) << __func__ << " existing conn is down." << dendl;
+      return ;
     }
   }
 
-  if (send_udp_msg(server_setup_socket, INFRC_UDP_BROKEN, NULL, 0, sendaddr, get_myaddr()) < 0)
+  if (send_udp_msg(server_setup_socket, INFRC_UDP_BROKEN, &gid, sizeof(gid), sendaddr, get_myaddr()) < 0)
     ldout(cct, 0) << __func__ << " send broken message failed" << dendl;
   else
-    ldout(cct, 20) << __func__ << " send broken message successfully" << dendl;
+    ldout(cct, 20) << __func__ << " send broken message(gid=" << gid << ") successfully" << dendl;
 }
 
 void InfRcMessenger::learned_addr(const entity_addr_t &peer_addr_for_me)

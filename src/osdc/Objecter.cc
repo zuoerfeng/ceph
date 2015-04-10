@@ -1846,83 +1846,83 @@ void Objecter::schedule_tick()
 
 void Objecter::tick()
 {
-  RWLock::RLocker rl(rwlock);
+  //RWLock::RLocker rl(rwlock);
 
-  ldout(cct, 10) << "tick" << dendl;
+  //ldout(cct, 10) << "tick" << dendl;
 
   // we are only called by C_Tick
   assert(tick_event);
   tick_event = NULL;
 
-  if (!initialized.read()) {
-    // we raced with shutdown
-    ldout(cct, 10) << __func__ << " raced with shutdown" << dendl;
-    return;
-  }
+  //if (!initialized.read()) {
+  //  // we raced with shutdown
+  //  ldout(cct, 10) << __func__ << " raced with shutdown" << dendl;
+  //  return;
+  //}
 
-  set<OSDSession*> toping;
+  //set<OSDSession*> toping;
 
-  int r = 0;
+  //int r = 0;
 
-  // look for laggy requests
-  utime_t cutoff = ceph_clock_now(cct);
-  cutoff -= cct->_conf->objecter_timeout;  // timeout
+  //// look for laggy requests
+  //utime_t cutoff = ceph_clock_now(cct);
+  //cutoff -= cct->_conf->objecter_timeout;  // timeout
 
-  unsigned laggy_ops;
+  //unsigned laggy_ops;
 
-  do {
-    laggy_ops = 0;
-    for (map<int,OSDSession*>::iterator siter = osd_sessions.begin(); siter != osd_sessions.end(); ++siter) {
-      OSDSession *s = siter->second;
-      RWLock::RLocker l(s->lock);
-      for (map<ceph_tid_t,Op*>::iterator p = s->ops.begin();
-           p != s->ops.end();
-           ++p) {
-        Op *op = p->second;
-        assert(op->session);
-        if (op->stamp < cutoff) {
-          ldout(cct, 2) << " tid " << p->first << " on osd." << op->session->osd << " is laggy" << dendl;
-          toping.insert(op->session);
-          ++laggy_ops;
-        }
-      }
-      for (map<uint64_t,LingerOp*>::iterator p = s->linger_ops.begin();
-           p != s->linger_ops.end();
-           ++p) {
-        LingerOp *op = p->second;
-        RWLock::WLocker wl(op->watch_lock);
-        assert(op->session);
-        ldout(cct, 10) << " pinging osd that serves lingering tid " << p->first << " (osd." << op->session->osd << ")" << dendl;
-        toping.insert(op->session);
-	if (op->is_watch && op->registered && !op->last_error)
-	  _send_linger_ping(op);
-      }
-      for (map<uint64_t,CommandOp*>::iterator p = s->command_ops.begin();
-           p != s->command_ops.end();
-           ++p) {
-        CommandOp *op = p->second;
-        assert(op->session);
-        ldout(cct, 10) << " pinging osd that serves command tid " << p->first << " (osd." << op->session->osd << ")" << dendl;
-        toping.insert(op->session);
-      }
-    }
-    if (num_homeless_ops.read() || !toping.empty()) {
-      _maybe_request_map();
-    }
-  } while (r == -EAGAIN);
+  //do {
+  //  laggy_ops = 0;
+  //  for (map<int,OSDSession*>::iterator siter = osd_sessions.begin(); siter != osd_sessions.end(); ++siter) {
+  //    OSDSession *s = siter->second;
+  //    RWLock::RLocker l(s->lock);
+  //    for (map<ceph_tid_t,Op*>::iterator p = s->ops.begin();
+  //         p != s->ops.end();
+  //         ++p) {
+  //      Op *op = p->second;
+  //      assert(op->session);
+  //      if (op->stamp < cutoff) {
+  //        ldout(cct, 2) << " tid " << p->first << " on osd." << op->session->osd << " is laggy" << dendl;
+  //        toping.insert(op->session);
+  //        ++laggy_ops;
+  //      }
+  //    }
+  //    for (map<uint64_t,LingerOp*>::iterator p = s->linger_ops.begin();
+  //         p != s->linger_ops.end();
+  //         ++p) {
+  //      LingerOp *op = p->second;
+  //      RWLock::WLocker wl(op->watch_lock);
+  //      assert(op->session);
+  //      ldout(cct, 10) << " pinging osd that serves lingering tid " << p->first << " (osd." << op->session->osd << ")" << dendl;
+  //      toping.insert(op->session);
+  //      if (op->is_watch && op->registered && !op->last_error)
+  //        _send_linger_ping(op);
+  //    }
+  //    for (map<uint64_t,CommandOp*>::iterator p = s->command_ops.begin();
+  //         p != s->command_ops.end();
+  //         ++p) {
+  //      CommandOp *op = p->second;
+  //      assert(op->session);
+  //      ldout(cct, 10) << " pinging osd that serves command tid " << p->first << " (osd." << op->session->osd << ")" << dendl;
+  //      toping.insert(op->session);
+  //    }
+  //  }
+  //  if (num_homeless_ops.read() || !toping.empty()) {
+  //    _maybe_request_map();
+  //  }
+  //} while (r == -EAGAIN);
 
-  logger->set(l_osdc_op_laggy, laggy_ops);
-  logger->set(l_osdc_osd_laggy, toping.size());
+  //logger->set(l_osdc_op_laggy, laggy_ops);
+  //logger->set(l_osdc_osd_laggy, toping.size());
 
-  if (!toping.empty()) {
-    // send a ping to these osds, to ensure we detect any session resets
-    // (osd reply message policy is lossy)
-    for (set<OSDSession*>::const_iterator i = toping.begin();
-	 i != toping.end();
-	 ++i) {
-      (*i)->con->send_message(new MPing);
-    }
-  }
+  //if (!toping.empty()) {
+  //  // send a ping to these osds, to ensure we detect any session resets
+  //  // (osd reply message policy is lossy)
+  //  for (set<OSDSession*>::const_iterator i = toping.begin();
+  //       i != toping.end();
+  //       ++i) {
+  //    (*i)->con->send_message(new MPing);
+  //  }
+  //}
 
   // reschedule
   schedule_tick();
@@ -2815,7 +2815,18 @@ void Objecter::_send_op(Op *op, MOSDOp *m)
 
   m->set_tid(op->tid);
 
-  op->session->con->send_message(m);
+  //op->session->con->send_message(m);
+  __le16 a = op->ops[0].op.op;
+  if(a != 8739){
+    op->session->con->send_message(m);
+    //std::cout << " send_message111 " << op->tid << " on " << con << "op = "<< a << std::endl;
+  }else{
+    MOSDOpReply *reply = new MOSDOpReply(m, 0, 0, CEPH_OSD_FLAG_ACK | CEPH_OSD_FLAG_ONDISK, false);
+    reply->set_result(0);
+    handle_osd_op_reply222(static_cast<MOSDOpReply*>(reply));
+    //std::cout << " handle_osd_op_reply111 " << op->tid << " on " << con << "op = "<< a << std::endl;
+    m->put();
+  }
 }
 
 int Objecter::calc_op_budget(Op *op)
@@ -2867,6 +2878,156 @@ void Objecter::unregister_op(Op *op)
   op->session = NULL;
 
   inflight_ops.dec();
+}
+
+void Objecter::AckFinish(Context *c, int rc){
+  c->complete(rc);
+}
+
+void Objecter::CommitFinish(Context *c, int rc){
+  c->complete(rc);
+}
+
+/* This function DOES put the passed message before returning */
+void Objecter::handle_osd_op_reply222(MOSDOpReply *m)
+{
+  ldout(cct, 10) << "in handle_osd_op_reply" << dendl;
+
+  // get pio
+  ceph_tid_t tid = m->get_tid();
+
+  int osd_num = (int)m->get_source().num();
+
+  map<int, OSDSession *>::iterator siter = osd_sessions.find(osd_num);
+  if (siter == osd_sessions.end()) {
+    ldout(cct, 7) << "handle_osd_op_reply " << tid
+		  << (m->is_ondisk() ? " ondisk":(m->is_onnvram() ?
+						  " onnvram":" ack"))
+		  << " ... unknown osd" << dendl;
+    m->put();
+    return;
+  }
+
+  OSDSession *s = siter->second;
+  get_session(s);
+
+  map<ceph_tid_t, Op *>::iterator iter = s->ops.find(tid);
+  if (iter == s->ops.end()) {
+    ldout(cct, 7) << "handle_osd_op_reply " << tid
+	    << (m->is_ondisk() ? " ondisk":(m->is_onnvram() ? " onnvram":" ack"))
+	    << " ... stray" << dendl;
+    put_session(s);
+    m->put();
+    return;
+  }
+
+  ldout(cct, 7) << "handle_osd_op_reply " << tid
+		<< (m->is_ondisk() ? " ondisk":(m->is_onnvram() ? " onnvram":" ack"))
+		<< " v " << m->get_replay_version() << " uv " << m->get_user_version()
+		<< " in " << m->get_pg()
+		<< " attempt " << m->get_retry_attempt()
+		<< dendl;
+  Op *op = iter->second;
+
+  if (m->get_retry_attempt() >= 0) {
+    if (m->get_retry_attempt() != (op->attempts - 1)) {
+      ldout(cct, 7) << " ignoring reply from attempt " << m->get_retry_attempt()
+		    << " from " << m->get_source_inst()
+		    << "; last attempt " << (op->attempts - 1) << " sent to "
+		    << op->session->con->get_peer_addr() << dendl;
+      m->put();
+      put_session(s);
+      return;
+    }
+  } else {
+    // we don't know the request attempt because the server is old, so
+    // just accept this one.  we may do ACK callbacks we shouldn't
+    // have, but that is better than doing callbacks out of order.
+  }
+
+  Context *onack = 0;
+  Context *oncommit = 0;
+
+  int rc = m->get_result();
+
+  // per-op result demuxing
+  vector<OSDOp> out_ops;
+  m->claim_ops(out_ops);
+  
+  if (out_ops.size() != op->ops.size())
+    ldout(cct, 0) << "WARNING: tid " << op->tid << " reply ops " << out_ops
+		  << " != request ops " << op->ops
+		  << " from " << m->get_source_inst() << dendl;
+
+  vector<bufferlist*>::iterator pb = op->out_bl.begin();
+  vector<int*>::iterator pr = op->out_rval.begin();
+  vector<Context*>::iterator ph = op->out_handler.begin();
+  assert(op->out_bl.size() == op->out_rval.size());
+  assert(op->out_bl.size() == op->out_handler.size());
+  vector<OSDOp>::iterator p = out_ops.begin();
+  for (unsigned i = 0;
+       p != out_ops.end() && pb != op->out_bl.end();
+       ++i, ++p, ++pb, ++pr, ++ph) {
+    ldout(cct, 10) << " op " << i << " rval " << p->rval
+		   << " len " << p->outdata.length() << dendl;
+    if (*pb)
+      **pb = p->outdata;
+    // set rval before running handlers so that handlers
+    // can change it if e.g. decoding fails
+    if (*pr)
+      **pr = p->rval;
+    if (*ph) {
+      ldout(cct, 10) << " op " << i << " handler " << *ph << dendl;
+      (*ph)->complete(p->rval);
+      *ph = NULL;
+    }
+  }
+
+  // ack|commit -> ack
+  if (op->onack) {
+    ldout(cct, 15) << "handle_osd_op_reply ack" << dendl;
+    op->replay_version = m->get_replay_version();
+    onack = op->onack;
+    op->onack = 0;  // only do callback once
+    num_unacked.dec();
+    logger->inc(l_osdc_op_ack);
+  }
+  if (op->oncommit && (m->is_ondisk() || rc)) {
+    ldout(cct, 15) << "handle_osd_op_reply safe" << dendl;
+    oncommit = op->oncommit;
+    op->oncommit = 0;
+    num_uncommitted.dec();
+    logger->inc(l_osdc_op_commit);
+  }
+
+  // got data?
+  if (op->outbl) {
+    if (op->con)
+      op->con->revoke_rx_buffer(op->tid);
+    m->claim_data(*op->outbl);
+    op->outbl = 0;
+  }
+
+  // done with this tid?
+  if (!op->onack && !op->oncommit) {
+    ldout(cct, 15) << "handle_osd_op_reply completed tid " << tid << dendl;
+    _finish_op(op);
+  }
+
+  ldout(cct, 5) << num_unacked.read() << " unacked, " << num_uncommitted.read() << " uncommitted" << dendl;
+
+  // do callbacks
+  if (onack) {
+    //onack->complete(rc);
+    AckFinish(onack, rc);
+  }
+  if (oncommit) {
+    //oncommit->complete(rc);
+    CommitFinish(oncommit, rc);
+  }
+
+  m->put();
+  put_session(s);
 }
 
 /* This function DOES put the passed message before returning */

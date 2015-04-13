@@ -416,6 +416,11 @@ unittest_subprocess_LDADD = $(LIBCOMMON) $(UNITTEST_LDADD)
 unittest_subprocess_CXXFLAGS = $(UNITTEST_CXXFLAGS)
 check_PROGRAMS += unittest_subprocess
 
+unittest_rbtree_SOURCES = test/common/test_rbtree.cc
+unittest_rbtree_CXXFLAGS = $(UNITTEST_CXXFLAGS)
+unittest_rbtree_LDADD = $(UNITTEST_LDADD) $(CEPH_GLOBAL)
+check_PROGRAMS += unittest_rbtree
+
 check_SCRIPTS += test/pybind/test_ceph_argparse.py
 check_SCRIPTS += test/pybind/test_ceph_daemon.py
 

@@ -73,6 +73,7 @@ libcommon_internal_la_SOURCES = \
 	common/module.c \
 	common/Readahead.cc \
 	common/Cycles.cc \
+	common/RBTree.cc \
 	common/ContextCompletion.cc
 
 libcommon_internal_la_SOURCES += \
@@ -230,6 +231,7 @@ noinst_HEADERS += \
 	common/Continuation.h \
 	common/Readahead.h \
 	common/Cycles.h \
+	common/RBTree.h \
 	common/Initialize.h \
 	common/ContextCompletion.h \
 	common/bit_vector.hpp \

@@ -3,6 +3,10 @@ include Makefile-env.am
 SUBDIRS += ocf java
 DIST_SUBDIRS += gmock ocf java
 
+if WITH_SLIBLMDB
+  SUBDIRS += mdb/libraries/liblmdb
+endif
+
 if NO_GIT_VERSION
 export NO_VERSION="yes"
 endif

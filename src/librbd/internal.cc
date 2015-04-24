@@ -21,6 +21,7 @@
 #include "librbd/AsyncFlattenRequest.h"
 #include "librbd/AsyncResizeRequest.h"
 #include "librbd/AsyncTrimRequest.h"
+#include "librbd/BlockCacher.h"
 #include "librbd/CopyupRequest.h"
 #include "librbd/ImageCtx.h"
 #include "librbd/ImageWatcher.h"
@@ -3815,6 +3816,13 @@ reprotect_and_return_err:
 
     // map
     vector<ObjectExtent> extents;
+
+    if (ictx->block_cacher) {
+      C_AioWrite *req_comp = new C_AioWrite(cct, c);
+      ictx->block_cacher->write_buffer(ictx->block_cacher_id, off, len, buf, req_comp, op_flags, snapc);
+      goto done;
+    }
+
     if (len > 0) {
       Striper::file_to_extents(ictx->cct, ictx->format_string,
 			       &ictx->layout, off, clip_len, 0, extents);
@@ -4089,9 +4097,20 @@ reprotect_and_return_err:
       readahead(ictx, image_extents);
     }
 
+    int64_t ret;
+    c->read_buf = buf;
+    c->read_bl = pbl;
+
     snap_t snap_id;
     map<object_t,vector<ObjectExtent> > object_extents;
     uint64_t buffer_ofs = 0;
+    char *read_buf = c->read_buf;
+    C_AioRead2 *comp_read;
+    c->get();
+    c->init_time(ictx, AIO_TYPE_READ);
+    if (ictx->block_cacher)
+      comp_read = new C_AioRead2(ictx->cct, c);
+
     {
       // prevent image size from changing between computing clip and recording
       // pending async operation
@@ -4110,19 +4129,27 @@ reprotect_and_return_err:
         }
         if (len == 0) {
 	  continue;
-        }
 
-        Striper::file_to_extents(cct, ictx->format_string, &ictx->layout,
-			         p->first, len, 0, object_extents, buffer_ofs);
+        if (ictx->block_cacher) {
+          if (read_buf) {
+            read_buf += p->second;
+          } else {
+            bufferptr ptr = buffer::create(p->second);
+            c->read_bl->append(ptr);
+            read_buf = ptr.c_str();
+          }
+          r = ictx->block_cacher->read_buffer(ictx->block_cacher_id, p->first, p->second,
+                                              read_buf, comp_read, snap_id, op_flags);
+          if (r < 0)
+            goto done;
+        } else {
+          Striper::file_to_extents(ictx->cct, ictx->format_string, &ictx->layout,
+                                  p->first, len, 0, object_extents, buffer_ofs);
+        }
         buffer_ofs += len;
       }
-
-      c->init_time(ictx, AIO_TYPE_READ);
     }
-
-    c->read_buf = buf;
     c->read_buf_len = buffer_ofs;
-    c->read_bl = pbl;
 
     for (map<object_t,vector<ObjectExtent> >::iterator p = object_extents.begin();
          p != object_extents.end(); ++p) {

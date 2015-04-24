@@ -2733,9 +2733,34 @@ inline ostream& operator<<(ostream& out, const ObjectExtent &ex)
              << ")";
 }
 
+// -----------------------------------------
 
+struct Page;
+class ObjectPage {
+ public:
+  object_t    oid;       // object id
+  uint64_t    objectno;
+  uint64_t    offset;    // in object
+  uint64_t    length;    // in object
+  uint64_t    truncate_size;	// in object
 
+  object_locator_t oloc;   // object locator (pool etc)
 
+  vector<Page*>  page_extents;
+  
+  ObjectPage() : objectno(0), offset(0), length(0), truncate_size(0) {}
+  ObjectPage(object_t o, uint64_t ono, uint64_t off, uint64_t l, uint64_t ts) :
+    oid(o), objectno(ono), offset(off), length(l), truncate_size(ts) { }
+};
+
+inline ostream& operator<<(ostream& out, const ObjectPage &ex)
+{
+  return out << "extent(" 
+             << ex.oid << " (" << ex.objectno << ") in " << ex.oloc
+             << " " << ex.offset << "~" << ex.length
+	     << " -> " << ex.page_extents
+             << ")";
+}
 
 
 // ---------------------------------------

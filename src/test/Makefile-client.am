@@ -255,6 +255,10 @@ ceph_test_rados_api_lock_LDADD = $(LIBRADOS) $(UNITTEST_LDADD) $(RADOS_TEST_LDAD
 ceph_test_rados_api_lock_CXXFLAGS = $(UNITTEST_CXXFLAGS)
 bin_DEBUGPROGRAMS += ceph_test_rados_api_lock
 
+ceph_test_block_cacher_SOURCES = test/librbd/test_BlockCacher.cc
+ceph_test_block_cacher_LDADD = librbd_internal.la librbd_api.la $(LIBRBD_TYPES) libcls_rbd_client.la libcls_lock_client.la librados_internal.la $(LIBRADOS) $(LIBOSDC) $(UNITTEST_LDADD) $(CEPH_GLOBAL) $(LIBCOMMON)
+ceph_test_block_cacher_CXXFLAGS = $(UNITTEST_CXXFLAGS)
+bin_DEBUGPROGRAMS += ceph_test_block_cacher
 
 ceph_test_stress_watch_SOURCES = test/test_stress_watch.cc
 ceph_test_stress_watch_LDADD = \

@@ -43,6 +43,8 @@ namespace librbd {
     bool has_parent() const {
       return !m_parent_extents.empty();
     }
+    uint64_t get_object_off() const { return m_object_off; }
+    uint64_t get_object_len() const { return m_object_len; }
 
   protected:
     bool compute_parent_extents();
@@ -76,6 +78,7 @@ namespace librbd {
     std::map<uint64_t, uint64_t> m_ext_map;
 
     friend class C_AioRead;
+    friend class C_BlockCacheRead;
 
   private:
     vector<pair<uint64_t,uint64_t> > m_buffer_extents;

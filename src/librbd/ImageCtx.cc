@@ -16,6 +16,7 @@
 #include "librbd/ImageCtx.h"
 #include "librbd/ImageWatcher.h"
 #include "librbd/ObjectMap.h"
+#include "librbd/BlockCacher.h"
 
 #include <boost/bind.hpp>
 
@@ -82,6 +83,7 @@ public:
       id(image_id), parent(NULL),
       stripe_unit(0), stripe_count(0), flags(0),
       object_cacher(NULL), writeback_handler(NULL), object_set(NULL),
+      block_cacher_id(0), block_cacher(NULL),
       readahead(),
       total_bytes_read(0), copyup_finisher(NULL),
       object_map(*this), aio_work_queue(NULL), op_work_queue(NULL)
@@ -111,6 +113,8 @@ public:
       delete object_cacher;
       object_cacher = NULL;
     }
+    if (block_cacher)
+      block_cacher->unregister_image(this);
     if (writeback_handler) {
       delete writeback_handler;
       writeback_handler = NULL;
@@ -185,42 +189,55 @@ public:
     }
 
     if (cache) {
-      Mutex::Locker l(cache_lock);
-      ldout(cct, 20) << "enabling caching..." << dendl;
-      writeback_handler = new LibrbdWriteback(this, cache_lock);
+      if (cct->_conf->rbd_block_cache) {
+        cct->lookup_or_create_singleton_object<BlockCacher>(block_cacher, BlockCacher::name);
+        block_cacher_id = block_cacher->register_image(this);
+        block_cacher->init(cct->_conf->rbd_cache_size, cct->_conf->rbd_block_cache_page_size,
+                           cct->_conf->rbd_block_cache_region_pages, cache_target_dirty,
+                           cache_max_dirty, cache_max_dirty_age);
+        if (stripe_unit < cct->_conf->rbd_block_cache_page_size) {
+          lderr(cct) << __func__ << " this image's stripe_unit=" << stripe_unit
+                     << " larger than page size=" << cct->_conf->rbd_block_cache_page_size << dendl;
+          return -EINVAL;
+        }
+      } else {
+        Mutex::Locker l(cache_lock);
+        ldout(cct, 20) << "enabling caching..." << dendl;
+        writeback_handler = new LibrbdWriteback(this, cache_lock);
 
-      uint64_t init_max_dirty = cache_max_dirty;
-      if (cache_writethrough_until_flush)
-	init_max_dirty = 0;
-      ldout(cct, 20) << "Initial cache settings:"
-		     << " size=" << cache_size
-		     << " num_objects=" << 10
-		     << " max_dirty=" << init_max_dirty
-		     << " target_dirty=" << cache_target_dirty
-		     << " max_dirty_age="
-		     << cache_max_dirty_age << dendl;
+        uint64_t init_max_dirty = cache_max_dirty;
+        if (cache_writethrough_until_flush)
+          init_max_dirty = 0;
+        ldout(cct, 20) << "Initial cache settings:"
+                      << " size=" << cache_size
+                      << " num_objects=" << 10
+                      << " max_dirty=" << init_max_dirty
+                      << " target_dirty=" << cache_target_dirty
+                      << " max_dirty_age="
+                      << cache_max_dirty_age << dendl;
 
-      object_cacher = new ObjectCacher(cct, pname, *writeback_handler, cache_lock,
-				       NULL, NULL,
-				       cache_size,
-				       10,  /* reset this in init */
-				       init_max_dirty,
-				       cache_target_dirty,
-				       cache_max_dirty_age,
-				       cache_block_writes_upfront);
+        object_cacher = new ObjectCacher(cct, pname, *writeback_handler, cache_lock,
+                                        NULL, NULL,
+                                        cache_size,
+                                        10,  /* reset this in init */
+                                        init_max_dirty,
+                                        cache_target_dirty,
+                                        cache_max_dirty_age,
+                                        cache_block_writes_upfront);
 
-      // size object cache appropriately
-      uint64_t obj = cache_max_dirty_object;
-      if (!obj) {
-	obj = MIN(2000, MAX(10, cache_size / 100 / sizeof(ObjectCacher::Object)));
+        // size object cache appropriately
+        uint64_t obj = cache_max_dirty_object;
+        if (!obj) {
+          obj = MIN(2000, MAX(10, cache_size / 100 / sizeof(ObjectCacher::Object)));
+        }
+        ldout(cct, 10) << " cache bytes " << cache_size
+          << " -> about " << obj << " objects" << dendl;
+        object_cacher->set_max_objects(obj);
+
+        object_set = new ObjectCacher::ObjectSet(NULL, data_ctx.get_id(), 0);
+        object_set->return_enoent = true;
+        object_cacher->start();
       }
-      ldout(cct, 10) << " cache bytes " << cache_size
-	<< " -> about " << obj << " objects" << dendl;
-      object_cacher->set_max_objects(obj);
-
-      object_set = new ObjectCacher::ObjectSet(NULL, data_ctx.get_id(), 0);
-      object_set->return_enoent = true;
-      object_cacher->start();
     }
 
     if (clone_copy_on_read) {

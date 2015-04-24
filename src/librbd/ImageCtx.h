@@ -42,6 +42,7 @@ namespace librbd {
   class AsyncResizeRequest;
   class CopyupRequest;
   class ImageWatcher;
+  class BlockCacher;
 
   struct ImageCtx {
     CephContext *cct;
@@ -114,6 +115,9 @@ namespace librbd {
     ObjectCacher *object_cacher;
     LibrbdWriteback *writeback_handler;
     ObjectCacher::ObjectSet *object_set;
+
+    uint64_t block_cacher_id;
+    BlockCacher *block_cacher;
 
     Readahead readahead;
     uint64_t total_bytes_read;

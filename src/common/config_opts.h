@@ -892,6 +892,9 @@ OPTION(rbd_op_threads, OPT_INT, 1)
 OPTION(rbd_op_thread_timeout, OPT_INT, 60)
 OPTION(rbd_non_blocking_aio, OPT_BOOL, true) // process AIO ops from a worker thread to prevent blocking
 OPTION(rbd_cache, OPT_BOOL, true) // whether to enable caching (writeback unless rbd_cache_max_dirty is 0)
+OPTION(rbd_block_cache, OPT_BOOL, true)
+OPTION(rbd_block_cache_page_size, OPT_U64, 1 << 13)
+OPTION(rbd_block_cache_region_pages, OPT_INT, 1024)
 OPTION(rbd_cache_writethrough_until_flush, OPT_BOOL, true) // whether to make writeback caching writethrough until flush is called, to be sure the user of librbd will send flushs so that writeback is safe
 OPTION(rbd_cache_size, OPT_LONGLONG, 32<<20)         // cache size in bytes
 OPTION(rbd_cache_max_dirty, OPT_LONGLONG, 24<<20)    // dirty limit in bytes - set to 0 for write-through caching

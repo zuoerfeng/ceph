@@ -132,6 +132,98 @@ void Striper::file_to_extents(CephContext *cct, const char *object_format,
   }
 }
 
+void Striper::file_to_pages(CephContext *cct, const char *object_format,
+                            const ceph_file_layout *layout,
+                            uint64_t offset, uint64_t len, uint64_t trunc_size,
+                            Page** pages, uint32_t page_length,
+                            map<object_t, vector<ObjectPage> >& extents)
+{
+  ldout(cct, 10) << __func__ << " " << offset << "~" << len 
+		 << " format " << object_format
+		 << dendl;
+  assert(len > 0);
+
+  __u32 object_size = layout->fl_object_size;
+  __u32 su = layout->fl_stripe_unit;
+  __u32 stripe_count = layout->fl_stripe_count;
+  assert(object_size >= su);
+  if (stripe_count == 1) {
+    ldout(cct, 20) << " sc is one, reset su to os" << dendl;
+    su = object_size;
+  }
+  uint64_t stripes_per_object = object_size / su;
+  ldout(cct, 20) << " su " << su << " sc " << stripe_count << " os " << object_size
+		 << " stripes_per_object " << stripes_per_object << dendl;
+
+  uint64_t cur = offset;
+  uint64_t left = len;
+  uint32_t page_pos = 0;
+  while (left > 0) {
+    // layout into objects
+    uint64_t blockno = cur / su;          // which block
+    uint64_t stripeno = blockno / stripe_count;    // which horizontal stripe        (Y)
+    uint64_t stripepos = blockno % stripe_count;   // which object in the object set (X)
+    uint64_t objectsetno = stripeno / stripes_per_object;       // which object set
+    uint64_t objectno = objectsetno * stripe_count + stripepos;  // object id
+
+    // find oid, extent
+    char buf[strlen(object_format) + 32];
+    snprintf(buf, sizeof(buf), object_format, (long long unsigned)objectno);
+    object_t oid = buf;
+
+    // map range into object
+    uint64_t block_start = (stripeno % stripes_per_object) * su;
+    uint64_t block_off = cur % su;
+    uint64_t max = su - block_off;
+
+    uint64_t x_offset = block_start + block_off;
+    uint64_t x_len;
+    if (left > max)
+      x_len = max;
+    else
+      x_len = left;
+
+    ldout(cct, 20) << " off " << cur << " blockno " << blockno << " stripeno " << stripeno
+		   << " stripepos " << stripepos << " objectsetno " << objectsetno
+		   << " objectno " << objectno
+		   << " block_start " << block_start
+		   << " block_off " << block_off
+		   << " " << x_offset << "~" << x_len
+		   << dendl;
+
+    ObjectPage *ex = 0;
+    vector<ObjectPage>& exv = extents[oid];
+    if (exv.empty() || exv.back().offset + exv.back().length != x_offset) {
+      exv.resize(exv.size() + 1);
+      ex = &exv.back();
+      ex->oid = oid;
+      ex->objectno = objectno;
+      ex->oloc = OSDMap::file_to_object_locator(*layout);
+
+      ex->offset = x_offset;
+      ex->length = x_len;
+      ex->truncate_size = object_truncate_size(cct, layout, objectno, trunc_size);
+
+      ldout(cct, 20) << " added new " << *ex << dendl;
+    } else {
+      // add to extent
+      ex = &exv.back();
+      ldout(cct, 20) << " adding in to " << *ex << dendl;
+      ex->length += x_len;
+    }
+    uint32_t page_pos_end = (cur + x_len) / page_length;
+    for (; page_pos < page_pos_end; ++page_pos)
+      ex->page_extents.push_back(pages[page_pos]);
+        
+    ldout(cct, 15) << __func__ << "  " << *ex << " in " << ex->oloc << dendl;
+    //ldout(cct, 0) << "map: ino " << ino << " oid " << ex.oid << " osd " << ex.osd << " offset " << ex.offset << " len " << ex.len << " ... left " << left << dendl;
+    
+    left -= x_len;
+    cur += x_len;
+  }
+}
+
+
 void Striper::assimilate_extents(map<object_t,vector<ObjectExtent> >& object_extents,
 				 vector<ObjectExtent>& extents)
 {

@@ -19,6 +19,7 @@
 #include "osd/osd_types.h"
 
 class CephContext;
+struct Page;
 
 //namespace ceph {
 
@@ -39,6 +40,12 @@ class CephContext;
 				uint64_t offset, uint64_t len, uint64_t trunc_size,
 				vector<ObjectExtent>& extents,
 				uint64_t buffer_offset=0);
+
+    static void file_to_pages(CephContext *cct, const char *object_format,
+			      const ceph_file_layout *layout,
+			      uint64_t offset, uint64_t len, uint64_t trunc_size,
+                              Page** pages, uint32_t page_length,
+                              map<object_t, vector<ObjectPage> >& extents);
 
     static void file_to_extents(CephContext *cct, inodeno_t ino,
 				const ceph_file_layout *layout,

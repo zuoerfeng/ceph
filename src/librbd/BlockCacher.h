@@ -48,11 +48,9 @@ namespace librbd {
   class ImageCtx;
   class PageRBTree {
     RBTree root;
-    Spinlock lock;
 
    public:
     RBTree::Iterator lower_bound(uint64_t offset) {
-      lock.lock();
       RBNode *node = root.rb_node, *parent = NULL;
       Page *page = NULL;
 
@@ -73,22 +71,18 @@ namespace librbd {
         ++it;
         page = it->get_container<Page>(offsetof(Page, rb));
       }
-      lock.unlock();
       return it;
     }
     RBTree::Iterator end() {
       return root.end();
     }
     RBTree::Iterator last() {
-      lock.lock();
       RBTree::Iterator it = root.last();
-      lock.unlock();
       return it;
     }
 
     void insert(Page *page)
     {
-      lock.lock();
       RBNode **n = &root.rb_node, *parent = NULL;
       uint64_t key = page->offset;
 
@@ -102,13 +96,13 @@ namespace librbd {
 
       root.rb_link_node(&page->rb, parent, n);
       root.insert_color(&page->rb);
-      lock.unlock();
     }
 
     void erase(Page *page) {
-      lock.lock();
       root.erase(&page->rb);
-      lock.unlock();
+    }
+    void clear() {
+      root.rb_node = NULL;
     }
   };
 
@@ -434,8 +428,7 @@ namespace librbd {
         dirty_writing_page.add(i);
       }
       void set_writeback() {
-        if (wt)
-          wt = false;
+        wt = false;
       }
     } dirty_page_state;
 
@@ -548,7 +541,7 @@ namespace librbd {
     void prepare_continuous_pages(ImageCtx *ictx, map<uint64_t, Page*> &flush_pages,
                                   map<object_t, vector<ObjectPage> > &object_extents);
     int get_pages(PageRBTree *tree, PageRBTree *ghost_tree, Page **pages, bool hit[], size_t page_size,
-                  size_t align_offset);
+                  size_t align_offset, bool only_hit=false);
     int read_object_extents(ImageCtx *ictx, uint64_t offset, size_t len,
                             map<object_t, vector<ObjectPage> > &object_extents,
                             char *buf, BlockCacherCompletion *c, uint64_t snap_id);
@@ -563,10 +556,17 @@ namespace librbd {
       flush_lock("BlockCacher::BlockCacher"), flusher_stop(true), flush_id(0), flusher_thread(this) {}
 
     ~BlockCacher() {
+      if (flusher_thread.is_started()) {
+        flusher_stop = true;
+        flush_lock.Lock();
+        flush_cond.Signal();
+        flush_lock.Unlock();
+        flusher_thread.join();
+      }
+
       assert(flush_retry_writes.empty());
       assert(flush_commits.empty());
       assert(wait_writeback.empty());
-      assert(!flusher_thread.is_started());
       if (mock && mock_thread) {
         mock_thread->stop();
         mock_thread->join();
@@ -591,6 +591,9 @@ namespace librbd {
 
     void init(uint64_t cache_size, uint64_t unit, uint64_t region_units,
               uint32_t target_dirty, uint32_t max_dirty, double dirty_age) {
+      // Don't init again if already init
+      if (page_length)
+        return ;
       page_length = unit;
       region_maxpages = region_units;
       remain_data_pages = cache_size / unit;
@@ -622,6 +625,8 @@ namespace librbd {
                     char *buf, Context *c, uint64_t snap_id, int op_flags);
     int write_buffer(uint64_t ictx_id, uint64_t off, size_t len, const char *buf,
                      Context *c, int op_flags, ::SnapContext &snapc);
+    void user_flush(Context *c);
+    void discard(uint64_t ictx_id, uint64_t offset, size_t len);
     int register_image(ImageCtx *ictx) {
       RWLock::WLocker l(ictx_management_lock);
       if (ictx_ids.find(ictx) != ictx_ids.end())
@@ -646,15 +651,8 @@ namespace librbd {
       ghost_trees[it->second]= NULL;
       ictx_ids.erase(it);
     }
-    void user_flush(Context *c);
-    void stop() {
-      assert(flusher_thread.is_started());
-      flusher_stop = true;
-      flush_lock.Lock();
-      flush_cond.Signal();
-      flush_lock.Unlock();
-      flusher_thread.join();
-    }
+    // purge.  non-blocking.  violently removes dirty buffers from cache.
+    void purge(uint64_t ictx_id);
 
     // uniq name for CephContext to distinguish differnt object
     static const string name;

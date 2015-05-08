@@ -666,6 +666,10 @@ public:
 
   void ImageCtx::flush_cache_aio(Context *onfinish) {
     assert(owner_lock.is_locked());
+    if (block_cacher) {
+      block_cacher->user_flush(onfinish);
+      return ;
+    }
     cache_lock.Lock();
     object_cacher->flush_set(object_set, onfinish);
     cache_lock.Unlock();
@@ -693,7 +697,8 @@ public:
 
     RWLock::RLocker owner_locker(owner_lock);
     int r = invalidate_cache(true);
-    object_cacher->stop();
+    if (object_cacher)
+      object_cacher->stop();
     return r;
   }
 
@@ -704,47 +709,60 @@ public:
     result = ctx.wait();
 
     if (result && purge_on_error) {
-      cache_lock.Lock();
-      if (object_cacher != NULL) {
-	lderr(cct) << "invalidate cache met error " << cpp_strerror(result) << " !Purging cache..." << dendl;
-	object_cacher->purge_set(object_set);
+      lderr(cct) << "invalidate cache met error " << cpp_strerror(result) << " !Purging cache..." << dendl;
+      if (block_cacher) {
+        block_cacher->purge(block_cacher_id);
+      } else if (object_cacher) {
+        cache_lock.Lock();
+        if (object_cacher != NULL) {
+          object_cacher->purge_set(object_set);
+        }
+        cache_lock.Unlock();
       }
-      cache_lock.Unlock();
     }
 
     return result;
   }
 
   void ImageCtx::invalidate_cache(Context *on_finish) {
-    if (object_cacher == NULL) {
+    if (object_cacher == NULL && block_cacher == NULL) {
       op_work_queue->queue(on_finish, 0);
       return;
     }
 
-    cache_lock.Lock();
-    object_cacher->release_set(object_set);
-    cache_lock.Unlock();
+    // block_cacher doesn't need to release here
+    if (object_cacher) {
+      cache_lock.Lock();
+      object_cacher->release_set(object_set);
+      cache_lock.Unlock();
+    }
 
     flush_cache_aio(new FunctionContext(boost::bind(
       &ImageCtx::invalidate_cache_completion, this, _1, on_finish)));
   }
 
   void ImageCtx::invalidate_cache_completion(int r, Context *on_finish) {
-    assert(cache_lock.is_locked());
+    if (object_cacher)
+      assert(cache_lock.is_locked());
     if (r == -EBLACKLISTED) {
       lderr(cct) << "Blacklisted during flush!  Purging cache..." << dendl;
-      object_cacher->purge_set(object_set);
+      if (object_cacher)
+        object_cacher->purge_set(object_set);
+      else if (block_cacher)
+        block_cacher->purge(block_cacher_id);
     } else if (r != 0) {
       lderr(cct) << "flush_cache returned " << r << dendl;
     }
 
-    loff_t unclean = object_cacher->release_set(object_set);
-    if (unclean == 0) {
-      r = 0;
-    } else {
-      lderr(cct) << "could not release all objects from cache: "
-                 << unclean << " bytes remain" << dendl;
-      r = -EBUSY;
+    if (object_cacher) {
+      loff_t unclean = object_cacher->release_set(object_set);
+      if (unclean == 0) {
+        r = 0;
+      } else {
+        lderr(cct) << "could not release all objects from cache: "
+                   << unclean << " bytes remain" << dendl;
+        r = -EBUSY;
+      }
     }
 
     op_work_queue->queue(on_finish, r);

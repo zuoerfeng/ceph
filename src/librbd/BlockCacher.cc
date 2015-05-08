@@ -96,7 +96,7 @@ int BlockCacher::reg_region(uint64_t size)
 
 // https://dl.dropboxusercontent.com/u/91714474/Papers/clockfast.pdf
 int BlockCacher::get_pages(PageRBTree *tree, PageRBTree *ghost_tree, Page **pages, bool hit[],
-                           size_t num_pages, size_t align_offset)
+                           size_t num_pages, size_t align_offset, bool only_hit)
 {
   ldout(cct, 10) << __func__ << " " << num_pages << " pages, align_offset=" << align_offset << dendl;
 
@@ -129,7 +129,10 @@ int BlockCacher::get_pages(PageRBTree *tree, PageRBTree *ghost_tree, Page **page
       break;
     }
   }
+  if (only_hit)
+    return 0;
 
+  assert(ghsot_tree);
   RBTree::Iterator ghost_it = ghost_tree->lower_bound(align_offset);
   Page *ghost_page = ghost_it != end ? ghost_it->get_container<Page>(offsetof(Page, rb)) : NULL;
   int hit_ghost_history;  // 0 is hit LRU_GHOST, 1 is hit LFU_GHOST, 2 is not hit
@@ -603,6 +606,7 @@ int BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
   return 0;
 }
 
+// TODO: we may want to only flush dirty pages for a specified image
 void BlockCacher::user_flush(Context *c)
 {
   ldout(cct, 20) << __func__ << " ctxt=" << c << dendl;
@@ -611,5 +615,54 @@ void BlockCacher::user_flush(Context *c)
   Mutex::Locker l(flush_lock);
   if (!flush_commits.empty())
     flush_commits[flush_id++].second = c;
+}
+
+void BlockCacher::discard(uint64_t ictx_id, uint64_t offset, size_t len)
+{
+  ldout(cct, 20) << __func__ << " ictx=" << ictx_id << " offset=" << offset << " len=" << len << dendl;
+
+  ictx_management_lock.get_read();
+  PageRBTree *tree = registered_tree[ictx_id];
+;
+  ictx_management_lock.put_read();
+
+  uint64_t start_padding = offset % page_length;
+  uint64_t align_offset = offset - start_padding;
+  size_t zeroed = 0, end_len = len + start_padding, copied;
+  uint32_t num_pages = (len + offset - align_offset) / page_length;
+  if ((offset + len) % page_length)
+    ++num_pages;
+
+  Page *pages[num_pages];
+  bool hit[num_pages];
+  tree_lock.Lock();
+  int r = get_pages(tree, NULL, pages, hit, num_pages, align_offset, true);
+  assert(r == 0);
+  for (uint64_t i = num_pages; i < num_pages; ++i) {
+    if (hit[i]) {
+      copied = MIN(end_len - zeroed, page_length);
+      memset(pages[i]->addr + start_padding, 0, copied);
+      ldout(cct, 20) << __func__ << " zero(" << pages[i]->offset + start_padding << ", "
+                     << copied << ")" << dendl;
+      zeroed += copied;
+    } else {
+      zeroed += page_length;
+    }
+    if (zeroed == end_len)
+      break;
+    start_padding = 0;
+  }
+  tree_lock.Unlock();
+}
+
+void BlockCacher::purge(uint64_t ictx_id)
+{
+  ldout(cct, 20) << __func__ << " ictx=" << ictx_id << dendl;
+
+  // Don't need to clear car_state's page
+  ictx_management_lock.get_read();
+  PageRBTree *tree = registered_tree[ictx_id];
+  ictx_management_lock.put_read();
+  tree->clear();
 }
 }

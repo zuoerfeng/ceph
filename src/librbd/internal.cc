@@ -2756,7 +2756,7 @@ reprotect_and_return_err:
 
     ictx->cancel_async_requests();
     ictx->flush_async_operations();
-    if (ictx->object_cacher) {
+    if (ictx->object_cacher || ictx->block_cacher) {
       // complete pending writes before we're set to a snapshot and
       // get -EROFS for writes
       RWLock::RLocker owner_locker(ictx->owner_lock);
@@ -2840,7 +2840,7 @@ reprotect_and_return_err:
     ictx->readahead.wait_for_pending();
 
     int r;
-    if (ictx->object_cacher) {
+    if (ictx->object_cacher || ictx->block_cacher) {
       r = ictx->shutdown_cache(); // implicitly flushes
     } else {
       r = flush(ictx);
@@ -3698,7 +3698,7 @@ reprotect_and_return_err:
     c->init_time(ictx, AIO_TYPE_FLUSH);
     C_AioWrite *req_comp = new C_AioWrite(cct, c);
     c->add_request();
-    if (ictx->object_cacher) {
+    if (ictx->object_cacher || ictx->block_cacher) {
       ictx->flush_cache_aio(req_comp);
     } else {
       librados::AioCompletion *rados_completion =
@@ -3736,7 +3736,7 @@ reprotect_and_return_err:
     CephContext *cct = ictx->cct;
     int r;
     // flush any outstanding writes
-    if (ictx->object_cacher) {
+    if (ictx->object_cacher || ictx->block_cacher) {
       r = ictx->flush_cache();
     } else {
       r = ictx->data_ctx.aio_flush();
@@ -3992,7 +3992,9 @@ reprotect_and_return_err:
       req->send();
     }
 
-    if (ictx->object_cacher) {
+    if (ictx->block_cacher) {
+      ictx->block_cacher->discard(ictx->block_cacher_id, off, len);
+    } else if (ictx->object_cacher) {
       Mutex::Locker l(ictx->cache_lock);
       ictx->object_cacher->discard_set(ictx->object_set, extents);
     }

@@ -107,8 +107,50 @@ public:
                                   thread_pool_singleton);
   }
 
+
+  ImageCtx::ImageCtx(const string &image_name, const string &image_id,
+                    const char *snap, IoCtx& p, bool ro, CephContext *c)
+    : cct(c),
+      perfcounter(NULL),
+      snap_id(CEPH_NOSNAP),
+      snap_exists(true),
+      read_only(ro),
+      flush_encountered(false),
+      exclusive_locked(false),
+      name(image_name),
+      image_watcher(NULL),
+      refresh_seq(0),
+      last_refresh(0),
+      owner_lock("librbd::ImageCtx::owner_lock"),
+      md_lock("librbd::ImageCtx::md_lock"),
+      cache_lock("librbd::ImageCtx::cache_lock"),
+      snap_lock("librbd::ImageCtx::snap_lock"),
+      parent_lock("librbd::ImageCtx::parent_lock"),
+      refresh_lock("librbd::ImageCtx::refresh_lock"),
+      object_map_lock("librbd::ImageCtx::object_map_lock"),
+      async_ops_lock("librbd::ImageCtx::async_ops_lock"),
+      copyup_list_lock("librbd::ImageCtx::copyup_list_lock"),
+      extra_read_flags(0),
+      old_format(true),
+      order(0), size(0), features(0),
+      format_string(NULL),
+      id(image_id), parent(NULL),
+      stripe_unit(0), stripe_count(0), flags(0),
+      object_cacher(NULL), writeback_handler(NULL), object_set(NULL),
+      block_cacher_id(0), block_cacher(NULL),
+      readahead(),
+      total_bytes_read(0), copyup_finisher(NULL),
+      object_map(*this)
+  {
+    if (snap)
+      snap_name = snap;
+    memset(&header, 0, sizeof(header));
+    memset(&layout, 0, sizeof(layout));
+  }
+
   ImageCtx::~ImageCtx() {
-    perf_stop();
+    if (perfcounter)
+      perf_stop();
     if (object_cacher) {
       delete object_cacher;
       object_cacher = NULL;

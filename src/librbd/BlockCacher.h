@@ -20,22 +20,20 @@
 #include "librbd/AioCompletion.h"
 #include "librbd/AioRequest.h"
 
-#define PAGE_DIRTY 1 << 0
 
 struct Page {
   RBNode rb;
   uint64_t offset;
   uint16_t ictx_id;
-  uint16_t flags;
   // The following fields are managed by CARState. When becoming
   // *_GHOST Page, NULL. is assigned. When translate from *_GHOST Page, data
   // address is assigned(only replace)
   uint8_t reference;
   uint8_t arc_idx;
-  uint8_t inflight; // is on reading
+  uint8_t onread; // is on reading
+  uint8_t dirty;
   char *addr;
-  Page *arc_next;
-  Page *dirty_or_ghost_prev, *dirty_or_ghost_next;
+  Page *page_prev, *page_next;
 };
 
 inline std::ostream& operator<<(std::ostream& out, const Page& page) {
@@ -119,47 +117,44 @@ namespace librbd {
     uint32_t arc_lru_limit;
     uint32_t data_pages;
     Mutex lock;
-    Cond wait_cond;
 
     Page* _pop_head_page(uint8_t arc_idx) {
       Page *p = arc_list_head[arc_idx];
-      if (arc_idx >= ARC_LRU_GHOST) {
-        p->dirty_or_ghost_next->dirty_or_ghost_prev = NULL;
-        arc_list_head[arc_idx] = p->dirty_or_ghost_next;
-        p->dirty_or_ghost_next = p->dirty_or_ghost_prev = NULL;
-      } else {
-        arc_list_head[arc_idx] = p->arc_next;
-        p->arc_next = NULL;
-      }
+      if (p->page_next)
+        p->page_next->page_prev = NULL;
+      arc_list_head[arc_idx] = p->page_next;
+      p->page_next = p->page_prev = NULL;
+      // no element
+      if (!arc_list_head[arc_idx])
+        arc_list_foot[arc_idx] = NULL;
       --arc_list_size[arc_idx];
       p->arc_idx = ARC_COUNT;
       return p;
     }
-    void _insert_page(Page *page, uint8_t dst) {
-      assert(page->arc_idx == ARC_COUNT && dst != ARC_COUNT);
+    void _append_page(Page *page, uint8_t dst) {
+      assert(!page->dirty && !page->page_next && !page->page_prev);
       page->arc_idx = dst;
-      assert(!page->dirty_or_ghost_next && !page->dirty_or_ghost_prev && !page->arc_next);
-      if (dst >= ARC_LRU_GHOST) {
-        page->addr = NULL;
-        arc_list_foot[dst]->dirty_or_ghost_next = page;
-        page->dirty_or_ghost_prev = arc_list_foot[dst];
-      } else {
-        arc_list_foot[dst]->arc_next = page;
-      }
+      if (arc_list_foot[dst])
+        arc_list_foot[dst]->page_next = page;
+      page->page_prev = arc_list_foot[dst];
       arc_list_foot[dst] = page;
+      if (!arc_list_head[dst])
+        arc_list_head[dst] = page;
       page->reference = 0;
       ++arc_list_size[dst];
     }
-    void _remove_ghost_page(Page *p) {
-      if (p->dirty_or_ghost_prev)
-        p->dirty_or_ghost_prev->dirty_or_ghost_next = p->dirty_or_ghost_next;
+    void _remove_page(Page *p) {
+      --arc_list_size[p->arc_idx];
+      if (p->page_prev)
+        p->page_prev->page_next = p->page_next;
       else
-        arc_list_head[p->arc_idx] = p->dirty_or_ghost_next;
-      if (p->dirty_or_ghost_next)
-        p->dirty_or_ghost_next->dirty_or_ghost_prev = p->dirty_or_ghost_prev;
+        arc_list_head[p->arc_idx] = p->page_next;
+      if (p->page_next)
+        p->page_next->page_prev = p->page_prev;
       else
-        arc_list_foot[p->arc_idx] = p->dirty_or_ghost_prev;
+        arc_list_foot[p->arc_idx] = p->page_prev;
       p->arc_idx = ARC_COUNT;
+      p->page_prev = p->page_next = NULL;
     }
 
    public:
@@ -180,62 +175,69 @@ namespace librbd {
       Mutex::Locker l(lock);
       Page *p = NULL;
       if (ghost_page) {
-        _remove_ghost_page(ghost_page);
+        _remove_page(ghost_page);
         p = ghost_page;
-      } else if (arc_list_size[ARC_LFU] == arc_list_size[ARC_LRU_GHOST]) {
+      } else if (arc_list_size[ARC_LRU] + arc_list_size[ARC_LRU_GHOST] == data_pages) {
         p = _pop_head_page(ARC_LRU_GHOST);
-      } else if (arc_list_size[ARC_LRU_GHOST] + arc_list_size[ARC_LFU_GHOST] == data_pages) {
+      } else if (arc_list_size[ARC_LRU] + arc_list_size[ARC_LFU] +
+                 arc_list_size[ARC_LRU_GHOST] + arc_list_size[ARC_LFU_GHOST] == data_pages * 2) {
         p = _pop_head_page(ARC_LFU_GHOST);
       }
       return p;
     }
-    Page* evict_data(Page *data_page) {
+    Page* evict_data() {
       Page *p;
       Mutex::Locker l(lock);
       while (true) {
         if (arc_list_size[ARC_LRU] >= arc_lru_limit) {
           p = _pop_head_page(ARC_LRU);
           if (p->reference) {
-            _insert_page(p, ARC_LFU);
+            _append_page(p, ARC_LFU);
           } else {
-            _insert_page(p, ARC_LRU_GHOST);
+            _append_page(p, ARC_LRU_GHOST);
             break;
           }
         } else {
           p = _pop_head_page(ARC_LFU);
           if (p->reference) {
-            _insert_page(p, ARC_LFU);
+            _append_page(p, ARC_LFU);
           } else {
-            _insert_page(p, ARC_LFU_GHOST);
+            _append_page(p, ARC_LFU_GHOST);
             break;
           }
         }
       };
-      data_page->offset = p->offset;
-      data_page->addr = p->addr;
       return p;
     }
 
     void set_lru_limit(uint32_t s) { arc_lru_limit = s; }
     void set_data_pages(uint32_t s) { data_pages = s; }
 
-    void insert_pages(Page **pages, size_t num_pages) {
+    void insert_page(Page *page) {
       Mutex::Locker l(lock);
-      for (size_t i = 0; i < num_pages; ++i) {
-        _insert_page(pages[i], pages[i]->arc_idx);
-      }
+      // we already increase size in adjust/make_dirty call, we need to decrease one now
+      --arc_list_size[page->arc_idx];
+      _append_page(page, page->arc_idx);
     }
-    void adjust_lru_limit(Page *cur_page, int hit_ghost_history);
+
+    inline void adjust_and_hold(Page *cur_page, int hit_ghost_history);
+    void make_dirty(Page *page) {
+      Mutex::Locker l(lock);
+      _remove_page(page);
+      ++arc_list_size[page->arc_idx];
+    }
     // Test Purpose
-    bool is_page_in(Page *page) {
+    bool is_page_in_or_inflight(Page *page) {
       assert(page->arc_idx != ARC_COUNT);
       Mutex::Locker l(lock);
       Page *p = arc_list_head[page->arc_idx];
       while (p) {
         if (p == page)
           return true;
-        p = p->arc_next;
+        p = p->page_next;
       }
+      if (page->onread)
+        return true;
       return false;
     }
     bool is_full() {
@@ -268,7 +270,7 @@ namespace librbd {
 
   class BlockCacherCompletion {
     public:
-      BlockCacherCompletion(Context *c) : count(0), ctxt(c) { }
+      BlockCacherCompletion(Context *c) : count(0), rval(0), ctxt(c) { }
       virtual ~BlockCacherCompletion() {}
       void add_request() { count.inc(); }
       void complete_request(int r);
@@ -290,57 +292,11 @@ namespace librbd {
       AioCompletion *m_completion;
   };
 
-  class MockLibrbdThread : public Thread {
-    CephContext *cct;
-    std::list<AioRead*> reads;
-    std::list<AioWrite*> writes;
-    bool done;
-    Mutex lock;
-    Cond cond;
-    double delay;
-
+  class MockThread : public Thread {
    public:
-    MockLibrbdThread(CephContext *c, double delay):
-      cct(c), done(false), lock("BlockCacher::MockLibrbdThread::lock"), delay(delay) { }
-    ~MockLibrbdThread() {}
-    void stop() {
-      Mutex::Locker l(lock);
-      done = true;
-      cond.Signal();
-    }
-    void* entry() {
-      Mutex::Locker l(lock);
-      while (!done && reads.empty() && writes.empty()) {
-        utime_t t = ceph_clock_now(cct);
-        t += delay * (rand() % 1000) / 1000.0;
-        cond.WaitUntil(lock, t);
-        if (!reads.empty()) {
-          AioRead *r = reads.front();
-          reads.pop_front();
-          bufferlist &data = r->data();
-          data.append_zero(r->get_object_len());
-          r->complete(0);
-        }
-
-        if (!writes.empty()) {
-          AioWrite *w = writes.front();
-          writes.pop_front();
-          w->complete(0);
-        }
-        if (reads.empty() && writes.empty())
-          cond.Wait(lock);
-      }
-      return 0;
-    }
-
-    void queue_read(AioRead *r) {
-      Mutex::Locker l(lock);
-      reads.push_back(r);
-    }
-    void queue_write(AioWrite *w) {
-      Mutex::Locker l(lock);
-      writes.push_back(w);
-    }
+    virtual void queue_read(AioRead *r, string &oid) = 0;
+    virtual void queue_write(AioWrite *w, string &oid) = 0;
+    virtual void stop() = 0;
   };
 
   class BlockCacher {
@@ -349,8 +305,7 @@ namespace librbd {
       uint64_t length;
     };
 
-    bool mock;
-    MockLibrbdThread *mock_thread;
+    MockThread *mock_thread;
     CephContext *cct;
     Mutex tree_lock;
     Cond tree_cond;
@@ -363,7 +318,7 @@ namespace librbd {
 
     // Immutable
     Page *all_pages;
-    uint32_t total_pages;
+    uint32_t total_half_pages;
     uint32_t region_maxpages;
     uint32_t page_length;
 
@@ -372,9 +327,10 @@ namespace librbd {
     vector<Region> regions;
     Page *free_pages_head;
     Page *free_data_pages_head;
+    size_t num_free_data_pages;
 
-    bool inflight_page_wait;
-    uint32_t inflight_pages; // If page is inflight, it won't in car_state
+    bool read_page_wait, write_page_wait;
+    atomic_t inflight_pages; // If page is inflight, it won't in car_state
 
     CARState car_state;
 
@@ -382,50 +338,56 @@ namespace librbd {
     struct DirtyPageState {
       bool wt;
       Page *dirty_pages_head, *dirty_pages_foot;
-      atomic_t dirty_writing_page;
       uint32_t dirty_pages;
       uint32_t target_pages;
       uint32_t max_dirty_pages;   // if 0 means writethrough
       utime_t max_dirty_age;
       DirtyPageState(): wt(true), dirty_pages_head(NULL), dirty_pages_foot(NULL),
-                        dirty_writing_page(0), dirty_pages(0), target_pages(0), max_dirty_pages(0) {}
+                        dirty_pages(0), target_pages(0), max_dirty_pages(0) {}
       bool writethrough() const { return wt || !max_dirty_pages; }
       bool need_writeback() const { return dirty_pages > target_pages; }
-      uint32_t writeback_pages() const {
+      uint32_t need_writeback_pages() const {
         return dirty_pages > target_pages ? dirty_pages - target_pages : 0;
       }
+      uint32_t get_dirty_pages() const { return dirty_pages; }
       void mark_dirty(Page *p) {
-        if (p->flags & PAGE_DIRTY) {
-          if (p->dirty_or_ghost_prev)
-            p->dirty_or_ghost_prev->dirty_or_ghost_next = p->dirty_or_ghost_next;
+        if (p->dirty) {
+          if (p->page_prev)
+            p->page_prev->page_next = p->page_next;
           else
-            dirty_pages_head = p->dirty_or_ghost_next;
-          if (p->dirty_or_ghost_next)
-            p->dirty_or_ghost_next->dirty_or_ghost_prev = p->dirty_or_ghost_prev;
+            dirty_pages_head = p->page_next;
+          if (p->page_next)
+            p->page_next->page_prev = p->page_prev;
           else
-            dirty_pages_foot = p->dirty_or_ghost_prev;
+            dirty_pages_foot = p->page_prev;
         } else {
-          p->flags |= PAGE_DIRTY;
+          p->dirty = 1;
           ++dirty_pages;
         }
-        p->dirty_or_ghost_prev = dirty_pages_foot;
-        dirty_pages_foot->dirty_or_ghost_next = p;
+        p->page_prev = dirty_pages_foot;
+        if (dirty_pages_foot)
+          dirty_pages_foot->page_next = p;
+        if (!dirty_pages_head)
+          dirty_pages_head = p;
         dirty_pages_foot = p;
-        p->dirty_or_ghost_next = NULL;
+        p->page_next = NULL;
       }
       void writeback_pages(map<uint16_t, map<uint64_t, Page*> > &sorted_flush, uint32_t num) {
         uint32_t i = 0;
-        Page *p = dirty_pages_head;
+        Page *p = dirty_pages_head, *prev;
         while (p) {
-          p->flags &= ~PAGE_DIRTY;
+          p->dirty = 0;
           sorted_flush[p->ictx_id][p->offset] = p;
-          p = p->dirty_or_ghost_next;
+          prev = p;
+          p = p->page_next;
+          prev->page_next = prev->page_prev = NULL;
           if (num && i++ > num)
             break;
         }
         dirty_pages -= i;
         dirty_pages_head = p;
-        dirty_writing_page.add(i);
+        if (!dirty_pages_head)
+          dirty_pages_foot = NULL;
       }
       void set_writeback() {
         wt = false;
@@ -438,12 +400,12 @@ namespace librbd {
       BlockCacherCompletion *comp;
       ObjectPage extent;
       uint64_t start, end;
-      char *buf;
+      char *start_buf;
       AioRead *req;
 
       C_BlockCacheRead(BlockCacher *bc, BlockCacherCompletion *c, ObjectPage &e,
                        uint64_t o, size_t l, char *b):
-          block_cacher(bc), comp(c), extent(e), start(o), end(o+l), buf(b) {
+          block_cacher(bc), comp(c), extent(e), start(o), end(o+l), start_buf(b) {
         comp->add_request();
       }
       virtual ~C_BlockCacheRead() {}
@@ -463,7 +425,9 @@ namespace librbd {
       uint64_t flush_id;
 
       C_BlockCacheWrite(BlockCacher *bc, BlockCacherCompletion *c, ImageCtx *ctx, ObjectPage &e, uint64_t fid):
-          block_cacher(bc), comp(c), ictx(ctx), extent(e), flush_id(fid) {}
+          block_cacher(bc), comp(c), ictx(ctx), extent(e), flush_id(fid) {
+        comp->add_request();
+      }
       virtual ~C_BlockCacheWrite() {}
       virtual void finish(int r) {
         block_cacher->complete_write(this, r);
@@ -472,8 +436,8 @@ namespace librbd {
       {
         AioWrite *req = new AioWrite(ictx, extent.oid.name, extent.objectno, extent.offset,
                                      data, snapc, this);
-        if (block_cacher->mock)
-          block_cacher->mock_thread->queue_write(req);
+        if (block_cacher->mock_thread)
+          block_cacher->mock_thread->queue_write(req, extent.oid.name);
         else
           req->send();
       }
@@ -505,20 +469,6 @@ namespace librbd {
     map<uint64_t, pair<uint64_t, Context*> > flush_commits;
     std::list<Context*> wait_writeback;
 
-    void unflight_pages(Page **pages, size_t page_num) {
-      assert(tree_lock.is_locked());
-      for (size_t i = 0; i < page_num; ++i) {
-        assert(pages[i]->inflight);
-        pages[i]->inflight = 0;
-      }
-      car_state.insert_pages(pages, page_num);
-      inflight_pages -= page_num;
-      if (inflight_page_wait) {
-        inflight_page_wait = false;
-        tree_cond.Signal();
-      }
-    }
-
     class FlusherThread : public Thread {
       BlockCacher *block_cacher;
      public:
@@ -535,23 +485,24 @@ namespace librbd {
     void flush_object_extent(ImageCtx *ictx, map<object_t, vector<ObjectPage> > &object_extents,
                              BlockCacherCompletion *c, ::SnapContext &snapc);
 
-    int reg_region(uint64_t size);
+    int reg_region(uint64_t num_pages);
     void complete_read(C_BlockCacheRead *bc_read_comp, int r);
     void complete_write(C_BlockCacheWrite *bc_write_comp, int r, bool noretry=false);
     void prepare_continuous_pages(ImageCtx *ictx, map<uint64_t, Page*> &flush_pages,
                                   map<object_t, vector<ObjectPage> > &object_extents);
-    int get_pages(PageRBTree *tree, PageRBTree *ghost_tree, Page **pages, bool hit[], size_t page_size,
-                  size_t align_offset, bool only_hit=false);
+    int get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost_tree, Page **pages,
+                  bool hit[], size_t page_size, size_t align_offset, bool only_hit=false);
     int read_object_extents(ImageCtx *ictx, uint64_t offset, size_t len,
                             map<object_t, vector<ObjectPage> > &object_extents,
                             char *buf, BlockCacherCompletion *c, uint64_t snap_id);
 
    public:
     BlockCacher(CephContext *c):
-      mock(false), cct(c), tree_lock("BlockCacher::tree_lock"),
+      mock_thread(NULL), cct(c), tree_lock("BlockCacher::tree_lock"),
       ictx_management_lock("BlockCacher::ictx_management_lock"), ictx_next(1), all_pages(NULL),
-      total_pages(0), region_maxpages(0), page_length(0), remain_data_pages(0),
-      free_pages_head(NULL), free_data_pages_head(NULL), inflight_page_wait(false),
+      total_half_pages(0), region_maxpages(0), page_length(0), remain_data_pages(0),
+      free_pages_head(NULL), free_data_pages_head(NULL), num_free_data_pages(0), 
+      read_page_wait(false), write_page_wait(false),
       inflight_pages(0), car_state(c), dirty_page_lock("BlockCacher::dirty_page_lock"),
       flush_lock("BlockCacher::BlockCacher"), flusher_stop(true), flush_id(0), flusher_thread(this) {}
 
@@ -567,7 +518,7 @@ namespace librbd {
       assert(flush_retry_writes.empty());
       assert(flush_commits.empty());
       assert(wait_writeback.empty());
-      if (mock && mock_thread) {
+      if (mock_thread) {
         mock_thread->stop();
         mock_thread->join();
         delete mock_thread;
@@ -590,33 +541,33 @@ namespace librbd {
     }
 
     void init(uint64_t cache_size, uint64_t unit, uint64_t region_units,
-              uint32_t target_dirty, uint32_t max_dirty, double dirty_age) {
+              uint32_t target_dirty, uint32_t max_dirty, double dirty_age, MockThread *m=NULL) {
       // Don't init again if already init
       if (page_length)
         return ;
       page_length = unit;
       region_maxpages = region_units;
-      remain_data_pages = cache_size / unit;
-      total_pages = remain_data_pages * 2;
+      total_half_pages = remain_data_pages = cache_size / unit;
       dirty_page_state.target_pages = target_dirty / unit;
       dirty_page_state.max_dirty_pages = max_dirty / unit;
       dirty_page_state.max_dirty_age.set_from_double(dirty_age);
       car_state.set_lru_limit(remain_data_pages / 2);
       car_state.set_data_pages(remain_data_pages);
 
-      int r = ::posix_memalign((void**)&all_pages, CEPH_PAGE_SIZE, total_pages*page_length);
-      assert(r);
-      memset(all_pages, 0, total_pages*page_length);
+      int r = ::posix_memalign((void**)&all_pages, CEPH_PAGE_SIZE, total_half_pages*2*page_length);
+      assert(!r);
+      memset(all_pages, 0, total_half_pages*2*page_length);
       Page *p = all_pages;
-      for (uint64_t i = 0; i < total_pages; ++i) {
-        p->arc_next = free_pages_head;
+      for (uint64_t i = 0; i < total_half_pages * 2; ++i) {
+        p->page_next = free_pages_head;
         free_pages_head = p;
         p->arc_idx = ARC_COUNT;
         ++p;
       }
+      flusher_stop = false;
       flusher_thread.create();
-      if (mock) {
-        mock_thread = new MockLibrbdThread(cct, 0.005);
+      if (m) {
+        mock_thread = m;
         mock_thread->create();
       }
     }
@@ -633,9 +584,13 @@ namespace librbd {
         return ictx_ids[ictx];
       PageRBTree *pt = new PageRBTree;
       PageRBTree *gpt = new PageRBTree;
-      registered_ictx.push_back(ictx);
-      registered_tree.push_back(pt);
-      ghost_trees.push_back(gpt);
+
+      registered_ictx.resize(ictx_next+1);
+      registered_ictx[ictx_next] = ictx;
+      registered_tree.resize(ictx_next+1);
+      registered_tree[ictx_next] = pt;
+      ghost_trees.resize(ictx_next+1);
+      ghost_trees[ictx_next] = gpt;
       ictx_ids[ictx] = ictx_next;
       return ictx_next++;
     }

@@ -9,10 +9,20 @@
  *
  * LGPL2.1 (see COPYING-LGPL2.1) or later
  */
+#include <fcntl.h>
 #include <stdlib.h>
 #include <time.h>
+#include <unistd.h>
 #include <map>
+#include <vector>
+#include <iostream>
+
+#include <boost/random/mersenne_twister.hpp>
+#include <boost/random/uniform_int.hpp>
+#include <boost/random/binomial_distribution.hpp>
+
 #include "include/rados/librados.h"
+#include "include/interval_set.h"
 #include "common/ceph_context.h"
 #include "common/ceph_argparse.h"
 #include "global/global_init.h"
@@ -21,6 +31,7 @@
 #include "gtest/gtest.h"
 #include "test/librbd/test_fixture.h"
 
+typedef boost::mt11213b gen_type;
 using namespace librbd;
 
 class TestCARState: public ::testing::Test {
@@ -61,8 +72,8 @@ TEST_F(TestCARState, Simulate)
       ASSERT_TRUE(car_state.validate());
     data_it = data_tree.find(offset);
     hit_ghost_history = 2;
-    if (data_it != data_tree.end()) {
-      ASSERT_TRUE(car_state.is_page_in(data_it->second));
+    if (data_it != data_tree.end() && data_it->second->offset == offset) {
+      ASSERT_TRUE(car_state.is_page_in_or_inflight(data_it->second));
       car_state.hit_page(data_it->second);
       continue;
     } else if (!free_data_pages.empty()) {
@@ -71,13 +82,18 @@ TEST_F(TestCARState, Simulate)
       free_data_pages.pop_back();
     } else {
       ASSERT_TRUE(car_state.is_full());
-      ASSERT_FALSE(car_state.is_page_in(data_it->second));
+      if (data_it != data_tree.end())
+        ASSERT_FALSE(car_state.is_page_in_or_inflight(data_it->second));
       ghost_it = ghost_tree.find(offset);
       ghost_page = NULL;
       if (ghost_it != ghost_tree.end() && ghost_it->second->offset == offset) {
         ghost_page = ghost_it->second;
         hit_ghost_history = ghost_page->arc_idx;
       }
+      ghost_page = car_state.evict_data();
+      data_tree.erase(ghost_page->offset);
+      ghost_tree[ghost_page->offset] = ghost_page;
+
       p = car_state.get_ghost_page(ghost_page);
       ASSERT_TRUE(p->arc_idx == ARC_COUNT);
       if (p) {
@@ -86,16 +102,96 @@ TEST_F(TestCARState, Simulate)
         p = free_ghost_pages.back();
         free_ghost_pages.pop_back();
       }
-      ghost_page = car_state.evict_data(p);
-      ghost_tree[ghost_page->offset] = ghost_page;
-      data_tree.erase(p->offset);
+      p->addr = ghost_page->addr;
     }
     p->offset = offset;
-    car_state.adjust_lru_limit(p, hit_ghost_history);
+    car_state.adjust_and_hold(p, hit_ghost_history);
     data_tree[offset] = p;
-    car_state.insert_pages(&p, 1);
+    car_state.insert_page(p);
   }
 }
+
+class MockLibrbdThread : public MockThread {
+  CephContext *cct;
+  std::list<pair<AioRead*, string> > reads;
+  std::list<pair<AioWrite*, string> > writes;
+  bool done;
+  Mutex lock;
+  Cond cond;
+  double delay;
+  char path[64];
+
+ public:
+  MockLibrbdThread(CephContext *c, double delay):
+    cct(c), done(false), lock("BlockCacher::MockLibrbdThread::lock"), delay(delay) {
+    sprintf(path, "MockLibrbdThread-%d-%d", getpid(), rand());
+    assert(::mkdir(path, 0755) == 0);
+  }
+  ~MockLibrbdThread() {}
+  void stop() {
+    Mutex::Locker l(lock);
+    done = true;
+    cond.Signal();
+  }
+  void* entry() {
+    char oid_path[256];
+    int fd;
+    ssize_t r;
+    Mutex::Locker l(lock);
+    while (!done || !reads.empty() || !writes.empty()) {
+      if (rand() % 100 == 0) {
+        utime_t t = ceph_clock_now(cct);
+        t += delay * (rand() % 1000) / 1000.0;
+        cond.WaitUntil(lock, t);
+      }
+      if (!reads.empty()) {
+        pair<AioRead*, string> p = reads.front();
+        reads.pop_front();
+        sprintf(oid_path, "%s/%s", path, p.second.c_str());
+        fd = ::open(oid_path, O_RDWR | O_CREAT, 0755);
+        bufferptr ptr(p.first->get_object_len());
+        r = ::pread(fd, ptr.c_str(), p.first->get_object_len(), p.first->get_object_off());
+        if (r < 0)
+          memset(ptr.c_str(), 0, p.first->get_object_len());
+        p.first->data().append(ptr);
+        lock.Unlock();
+        p.first->complete(0);
+        lock.Lock();
+        ::close(fd);
+      }
+
+      if (!writes.empty()) {
+        pair<AioWrite*, string> p = writes.front();
+        writes.pop_front();
+        sprintf(oid_path, "%s/%s", path, p.second.c_str());
+        fd = ::open(oid_path, O_RDWR | O_CREAT, 0755);
+        assert(fd != -1);
+        bufferptr ptr(p.first->get_object_len());
+        r = ::pwrite(fd, ptr.c_str(), p.first->get_object_len(), p.first->get_object_off());
+        assert(r != -1);
+        ::close(fd);
+        lock.Unlock();
+         p.first->complete(0);
+        lock.Lock();
+      }
+      if (reads.empty() && writes.empty())
+        cond.Wait(lock);
+    }
+    return 0;
+  }
+
+  void queue_read(AioRead *r, string &oid) {
+    Mutex::Locker l(lock);
+    reads.push_back(make_pair(r, oid));
+    cond.Signal();
+  }
+  void queue_write(AioWrite *w, string &oid) {
+    Mutex::Locker l(lock);
+    writes.push_back(make_pair(w, oid));
+    cond.Signal();
+  }
+};
+
 
 class TestBlockCacher : public ::testing::Test {
   librados::IoCtx m_ioctx;
@@ -108,7 +204,8 @@ class TestBlockCacher : public ::testing::Test {
 
   void init(uint64_t cache_size=32*1024*1024, uint64_t unit=4*1024, uint64_t region_units=8*1024,
             uint32_t target_dirty=8*1024*1024, uint32_t max_dirty=16*1024*1024, double dirty_age=1) {
-    block_cacher->init(cache_size, unit, region_units, target_dirty, max_dirty, dirty_age);
+    block_cacher->init(cache_size, unit, region_units, target_dirty, max_dirty, dirty_age,
+                       new MockLibrbdThread(g_ceph_context, 0.1));
   }
   virtual void TearDown() {
     for (vector<ImageCtx*>::iterator it = ictxs.begin(); it != ictxs.end(); ++it) {
@@ -118,13 +215,15 @@ class TestBlockCacher : public ::testing::Test {
     delete block_cacher;
   }
   ImageCtx *generate_ictx(string image_name, uint64_t stripe_unit, uint64_t stripe_count, uint64_t order) {
-    ImageCtx *ictx = new ImageCtx(image_name.c_str(), "", NULL, m_ioctx, false);
+    ImageCtx *ictx = new ImageCtx(image_name.c_str(), "", NULL, m_ioctx, false, g_ceph_context);
     ictx->layout.fl_stripe_unit = stripe_unit;
     ictx->layout.fl_stripe_count = stripe_count;
     ictx->layout.fl_object_size = 1ull << order;
     ictx->layout.fl_pg_pool = 1;
+    ictx->format_string = new char[10];
+    sprintf(ictx->format_string, "prefix");
     ictx->block_cacher = block_cacher;
-    block_cacher->register_image(ictx);
+    ictx->block_cacher_id = block_cacher->register_image(ictx);
     ictxs.push_back(ictx);
     return ictx;
   }
@@ -133,16 +232,256 @@ class TestBlockCacher : public ::testing::Test {
 TEST_F(TestBlockCacher, BasicOps)
 {
   init();
-  char buf[100];
-  C_SaferCond ctx;
-  ImageCtx *ictx = generate_ictx("test_image", 0, 0, 22);
-  block_cacher->write_buffer(ictx->block_cacher_id, 0, 100, buf, &ctx, 0, ictx->snapc);
-  ctx.wait();
-  block_cacher->read_buffer(ictx->block_cacher_id, 0, 100, buf, &ctx, 0, 0);
-  ctx.wait();
-  block_cacher->user_flush(&ctx);
-  ctx.wait();
+  char buf[100], read_buf[100];
+  memset(buf, 1, sizeof(buf));
+  ImageCtx *ictx = generate_ictx("test_image", 1<<22, 1, 22);
+  C_SaferCond *ctx = new C_SaferCond();
+  block_cacher->write_buffer(ictx->block_cacher_id, 0, 100, buf, ctx, 0, ictx->snapc);
+  ctx->wait();
+  delete ctx;
+  ctx = new C_SaferCond();
+  block_cacher->user_flush(ctx);
+  ctx->wait();
+  delete ctx;
+  ctx = new C_SaferCond();
+  block_cacher->read_buffer(ictx->block_cacher_id, 0, 100, read_buf, ctx, 0, 0);
+  ctx->wait();
+  delete ctx;
+  ctx = new C_SaferCond();
+  ASSERT_EQ(memcmp(buf, read_buf, sizeof(buf)), 0);
+
+  char large_buf[1024*1024], large_read_buf[1024*1024];
+  memset(large_buf, 2, sizeof(large_buf));
+  block_cacher->write_buffer(ictx->block_cacher_id, 1<<23, 1024*1024, large_buf, ctx, 0, ictx->snapc);
+  ctx->wait();
+  delete ctx;
+  ctx = new C_SaferCond();
+  block_cacher->read_buffer(ictx->block_cacher_id, 1<<23, 1024*1024, large_read_buf, ctx, 0, 0);
+  ctx->wait();
+  delete ctx;
+  ctx = new C_SaferCond();
+  ASSERT_EQ(memcmp(large_buf, large_read_buf, sizeof(large_buf)), 0);
+
+  block_cacher->discard(ictx->block_cacher_id, 0, 100);
+  memset(buf, 0, sizeof(buf));
+  block_cacher->read_buffer(ictx->block_cacher_id, 0, 100, read_buf, ctx, 0, 0);
+  ctx->wait();
+  delete ctx;
+  ASSERT_EQ(memcmp(buf, read_buf, sizeof(buf)), 0);
+  block_cacher->purge(ictx->block_cacher_id);
 }
+
+class SyntheticWorkload {
+  BlockCacher *block_cacher;
+  vector<ImageCtx*> ictxs;
+  vector<uint32_t> digests;
+  vector<string> rand_data;
+  Mutex lock;
+  interval_set<uint64_t> inflight_offsets;
+  gen_type rng;
+  int bs;
+  size_t max_size;
+
+  class SyntheticContext: public Context {
+    SyntheticWorkload *w;
+    char *buf;
+    uint64_t offset;
+    size_t len;
+    bool read;
+
+   public:
+    SyntheticContext(SyntheticWorkload *w, char *b, uint64_t off, size_t len, bool r):
+        w(w), buf(b), offset(off), len(len), read(r) {}
+    virtual void finish(int r) {
+      Mutex::Locker l(w->lock);
+      uint32_t crc;
+      uint64_t start = offset;
+      if (read) {
+        for (const char *b = buf; start < offset + len;
+             start += w->bs, b += w->bs) {
+          crc = ceph_crc32c(0, (unsigned char*)b, w->bs);
+          ASSERT_EQ(crc, w->digests[start/w->bs]);
+        }
+      } else {
+        for (const char *b = buf; start < offset + len;
+             start += w->bs, b += w->bs) {
+          crc = ceph_crc32c(0, (unsigned char*)b, w->bs);
+          w->digests[start/w->bs] = crc;
+          cerr << __func__ << " offset=" << start << " crc=" << crc << std::endl;
+        }
+      }
+      w->inflight_offsets.erase(offset, len);
+      delete buf;
+    }
+  };
+  friend class SyntheticContext;
+
+ public:
+  static const int RANDOM_DATA_NUM = 100;
+  SyntheticWorkload(BlockCacher *bc, int bs, int s):
+      block_cacher(bc), lock("SyntheticWorkload::lock"), rng(time(NULL)), bs(bs), max_size(s) {
+    boost::uniform_int<> u(0, max_size/100);
+    char *data = new char[max_size/100];
+    size_t len;
+    for (int i = 0; i < RANDOM_DATA_NUM; i++) {
+      len = u(rng) + 4096;
+      len = len - len % bs;
+      memset(data, 0, len);
+      for (uint64_t j = 0; j < len-sizeof(i); j += 512)
+        memcpy(data+j, &i, sizeof(i));
+      rand_data.push_back(string(data, len));
+    }
+    digests.resize(s/bs);
+    for (int i = 0; i < s/bs; ++i)
+      digests[i] = 0;
+  }
+
+  int add_image(ImageCtx *ictx) {
+    ictxs.push_back(ictx);
+    return ictxs.size() - 1;
+  }
+
+  void read(int id) {
+    boost::uniform_int<> u(0, max_size);
+    uint64_t offset, len;
+    lock.Lock();
+    do {
+      offset = u(rng);
+      offset = offset - offset % bs;
+      len = u(rng);
+      if (len + offset >= max_size)
+        len = max_size - offset;
+      len = len - len % bs;
+    } while (len && inflight_offsets.contains(offset, len));
+    char *buf = new char[len];
+    SyntheticContext *ctx = new SyntheticContext(this, buf, offset, len, true);
+    inflight_offsets.insert(offset, len);
+    lock.Unlock();
+    block_cacher->read_buffer(ictxs[id]->block_cacher_id, offset, len, buf, ctx, 0, 0);
+  }
+
+  void write(int id) {
+    boost::uniform_int<> u(0, max_size);
+    uint64_t offset, len;
+    lock.Lock();
+    string &d = rand_data[u(rng) % (rand_data.size()-1)];
+    do {
+      offset = u(rng);
+      if (offset + d.size() > max_size)
+        offset = max_size - d.size();
+      offset = offset - offset % bs;
+      len = d.size();
+    } while (inflight_offsets.contains(offset, len));
+    char *buf = new char[len];
+    SyntheticContext *ctx = new SyntheticContext(this, buf, offset, len, false);
+    inflight_offsets.insert(offset, len);
+    lock.Unlock();
+    d.copy(buf, 0, len);
+    block_cacher->write_buffer(ictxs[id]->block_cacher_id, offset, len, buf, ctx, 0, ictxs[id]->snapc);
+  }
+
+  void print_internal_state() {
+    Mutex::Locker l(lock);
+    cerr << " available_offsets: " << inflight_offsets.num_intervals() << std::endl;
+  }
+
+  void wait_for_done() {
+    uint64_t i = 0;
+    lock.Lock();
+    while (!inflight_offsets.empty()) {
+      lock.Unlock();
+      usleep(1000*100);
+      if (i++ % 50 == 0)
+        print_internal_state();
+      lock.Lock();
+    }
+    lock.Unlock();
+  }
+};
+
+TEST_F(TestBlockCacher, Write)
+{
+  init();
+  ImageCtx *ictx = generate_ictx("test_image", 1<<22, 1, 22);
+  SyntheticWorkload work_load(block_cacher, 4096, 1024*1024*1024);
+  int id = work_load.add_image(ictx);
+
+  gen_type rng(time(NULL));
+  for (int i = 0; i < 10000; ++i) {
+    if (!(i % 10)) {
+      cerr << "Op " << i << ": ";
+      work_load.print_internal_state();
+    }
+    boost::uniform_int<> true_false(0, 99);
+    int val = true_false(rng);
+    if (val > 10) {
+      work_load.write(id);
+    } else {
+      usleep(rand() % 1000 + 500);
+    }
+  }
+  work_load.wait_for_done();
+}
+
+TEST_F(TestBlockCacher, Read)
+{
+  init();
+  ImageCtx *ictx = generate_ictx("test_image", 1<<22, 1, 22);
+  SyntheticWorkload work_load(block_cacher, 4096, 1024*1024*1024);
+  int id = work_load.add_image(ictx);
+
+  for (int i = 0; i < 5000; ++i) {
+    if (!(i % 10)) cerr << "seeding write " << i << std::endl;
+    work_load.write(id);
+  }
+
+  gen_type rng(time(NULL));
+  for (int i = 0; i < 10000; ++i) {
+    if (!(i % 10)) {
+      cerr << "Op " << i << ": ";
+      work_load.print_internal_state();
+    }
+    boost::uniform_int<> true_false(0, 99);
+    int val = true_false(rng);
+    if (val > 10) {
+      work_load.read(id);
+    } else {
+      usleep(rand() % 1000 + 500);
+    }
+  }
+  work_load.wait_for_done();
+}
+
+TEST_F(TestBlockCacher, ReadWrite)
+{
+  init();
+  ImageCtx *ictx = generate_ictx("test_image", 1<<22, 1, 22);
+  SyntheticWorkload work_load(block_cacher, 4096, 1024*1024*1024);
+  int id = work_load.add_image(ictx);
+
+  for (int i = 0; i < 1000; ++i) {
+    if (!(i % 10)) cerr << "seeding write " << i << std::endl;
+    work_load.write(id);
+  }
+  gen_type rng(time(NULL));
+  for (int i = 0; i < 10000; ++i) {
+    if (!(i % 10)) {
+      cerr << "Op " << i << ": ";
+      work_load.print_internal_state();
+    }
+    boost::uniform_int<> true_false(0, 99);
+    int val = true_false(rng);
+    if (val > 55) {
+      work_load.write(id);
+    } else if (val > 10) {
+      work_load.read(id);
+    } else {
+      usleep(rand() % 1000 + 500);
+    }
+  }
+  work_load.wait_for_done();
+}
+
 
 int main(int argc, char **argv) {
   vector<const char*> args;

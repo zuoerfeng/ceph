@@ -55,49 +55,45 @@ struct RBTree {
     RBNode* operator->() { return &(operator*()); }
     RBNode& operator*() const { return *cur; }
     Iterator& operator++() {
-      if (cur) {
+      /*
+       * If we have a right-hand child, go down and then left as far
+       * as we can.
+       */
+      if (cur->rb_right) {
+        cur = cur->rb_right;
+        while (cur->rb_left)
+          cur = cur->rb_left;
+      } else {
         /*
-         * If we have a right-hand child, go down and then left as far
-         * as we can.
+         * No right-hand children. Everything down and left is smaller than us,
+         * so any 'next' node must be in the general direction of our parent.
+         * Go up the tree; any time the ancestor is a right-hand child of its
+         * parent, keep going up. First time it's a left-hand child of its
+         * parent, said parent is our 'next' node.
          */
-        if (cur->rb_right) {
-          cur = cur->rb_right;
-          while (cur->rb_left)
-            cur = cur->rb_left;
-        } else {
-          /*
-           * No right-hand children. Everything down and left is smaller than us,
-           * so any 'next' node must be in the general direction of our parent.
-           * Go up the tree; any time the ancestor is a right-hand child of its
-           * parent, keep going up. First time it's a left-hand child of its
-           * parent, said parent is our 'next' node.
-           */
-          RBNode *child = cur;
-          while ((cur = cur->parent()) && child == cur->rb_right)
-            child = cur;
-        }
+        RBNode *child = cur;
+        while ((cur = cur->parent()) && child == cur->rb_right)
+          child = cur;
       }
       return *this;
     }
     Iterator& operator--() {
-      if (cur) {
+      /*
+       * If we have a left-hand child, go down and then right as far
+       * as we can.
+       */
+      if (cur->rb_left) {
+        cur = cur->rb_left;
+        while (cur->rb_right)
+          cur = cur->rb_right;
+      } else {
         /*
-         * If we have a left-hand child, go down and then right as far
-         * as we can.
+         * No left-hand children. Go up till we find an ancestor which
+         * is a right-hand child of its parent.
          */
-        if (cur->rb_left) {
-          cur = cur->rb_left;
-          while (cur->rb_right)
-            cur = cur->rb_right;
-        } else {
-          /*
-           * No left-hand children. Go up till we find an ancestor which
-           * is a right-hand child of its parent.
-           */
-          RBNode *child = cur;
-          while ((cur = cur->parent()) && child == cur->rb_right)
-            child = cur;
-        }
+        RBNode *child = cur;
+        while ((cur = cur->parent()) && child == cur->rb_right)
+          child = cur;
       }
       return *this;
     }

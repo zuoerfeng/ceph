@@ -38,8 +38,14 @@ class TestRBTree : public ::testing::Test {
   RBTree root;
   TestNode nodes[NODES];
   virtual void SetUp() {
+    set<uint32_t> existings;
+    uint32_t k;
     for (int i = 0; i < NODES; i++) {
-      nodes[i].key = rand();
+      do {
+        k = rand() % 1000;
+      } while (existings.count(k));
+      existings.insert(k);
+      nodes[i].key = k;
       nodes[i].val = rand();
     }
   }
@@ -63,8 +69,10 @@ class TestRBTree : public ::testing::Test {
     }
 
     RBTree::Iterator it(parent);
-    if (node && key > node->key)
+    while (node && key > node->key) {
       ++it;
+      node = it->get_container<TestNode>(offsetof(TestNode, rb));
+    }
 
     map<uint32_t, uint32_t>::iterator verify_it = verify.lower_bound(key);
     if (verify_it != verify.end()) {
@@ -167,12 +175,12 @@ TEST_F(TestRBTree, Basic)
     for (j = 0; j < NODES; j++) {
       check(j);
       insert(nodes + j);
-      lower_bound(rand());
+      lower_bound(rand() % 1000);
     }
     for (j = 0; j < NODES; j++) {
       check(NODES - j);
       erase(nodes + j);
-      lower_bound(rand());
+      lower_bound(rand() % 1000);
     }
     check(0);
   }

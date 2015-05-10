@@ -172,6 +172,9 @@ namespace librbd {
      */
     ImageCtx(const std::string &image_name, const std::string &image_id,
 	     const char *snap, IoCtx& p, bool read_only);
+    // Test Purpose
+    ImageCtx(const std::string &image_name, const std::string &image_id,
+            const char *snap, IoCtx& p, bool read_only, CephContext *cct);
     ~ImageCtx();
     int init();
     void init_layout();

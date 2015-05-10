@@ -2746,7 +2746,7 @@ class ObjectPage {
 
   object_locator_t oloc;   // object locator (pool etc)
 
-  vector<Page*>  page_extents;
+  vector<pair<uint64_t, Page*> >  page_extents;
   
   ObjectPage() : objectno(0), offset(0), length(0), truncate_size(0) {}
   ObjectPage(object_t o, uint64_t ono, uint64_t off, uint64_t l, uint64_t ts) :

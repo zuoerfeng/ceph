@@ -55,24 +55,19 @@ class TestRBTree : public ::testing::Test {
     TestNode *node = NULL;
 
     while (n) {
-      parent = n;
       node = n->get_container<TestNode>(offsetof(TestNode, rb));
 
-      if (key < node->key) {
+      if (key <= node->key) {
+        parent = n;
         n = n->rb_left;
       } else if (key > node->key) {
         n = n->rb_right;
-      } else {
-        parent = n;
-        break;
       }
     }
 
     RBTree::Iterator it(parent);
-    while (node && key > node->key) {
-      ++it;
+    if (it != root.end())
       node = it->get_container<TestNode>(offsetof(TestNode, rb));
-    }
 
     map<uint32_t, uint32_t>::iterator verify_it = verify.lower_bound(key);
     if (verify_it != verify.end()) {
@@ -175,6 +170,11 @@ TEST_F(TestRBTree, Basic)
     for (j = 0; j < NODES; j++) {
       check(j);
       insert(nodes + j);
+      lower_bound(rand() % 1000);
+      lower_bound(rand() % 1000);
+      lower_bound(rand() % 1000);
+      lower_bound(rand() % 1000);
+      lower_bound(rand() % 1000);
       lower_bound(rand() % 1000);
     }
     for (j = 0; j < NODES; j++) {

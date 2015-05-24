@@ -211,10 +211,8 @@ void Striper::file_to_pages(CephContext *cct, const char *object_format,
       ldout(cct, 20) << " adding in to " << *ex << dendl;
       ex->length += x_len;
     }
-    uint64_t page_xoffset_end = x_offset + x_len;
-    uint64_t page_xoffset = x_offset;
-    for (; page_xoffset < page_xoffset_end; page_xoffset += page_length, ++page_pos)
-      ex->page_extents.push_back(make_pair(page_xoffset, pages[page_pos]));
+    for (size_t l = 0; l < x_len; l += page_length, ++page_pos)
+      ex->page_extents.push_back(pages[page_pos]);
         
     ldout(cct, 15) << __func__ << "  " << *ex << " in " << ex->oloc << dendl;
     //ldout(cct, 0) << "map: ino " << ino << " oid " << ex.oid << " osd " << ex.osd << " offset " << ex.offset << " len " << ex.len << " ... left " << left << dendl;

@@ -210,6 +210,7 @@ namespace librbd {
     void set_op_flags(int op_flags) {
       m_op_flags = op_flags;
     }
+    ceph::bufferlist &data() { return m_write_data; }
   protected:
     virtual void add_write_ops(librados::ObjectWriteOperation *wr);
 

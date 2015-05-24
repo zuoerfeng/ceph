@@ -3853,6 +3853,7 @@ reprotect_and_return_err:
       }
     }
 
+   done:
     c->finish_adding_requests(ictx->cct);
     c->put();
 
@@ -4099,7 +4100,6 @@ reprotect_and_return_err:
       readahead(ictx, image_extents);
     }
 
-    int64_t ret;
     c->read_buf = buf;
     c->read_bl = pbl;
 
@@ -4129,7 +4129,7 @@ reprotect_and_return_err:
           c->fail(cct, r);
 	  return;
         }
-        if (len == 0) {
+        if (len == 0)
 	  continue;
 
         if (ictx->block_cacher) {
@@ -4140,10 +4140,9 @@ reprotect_and_return_err:
             c->read_bl->append(ptr);
             read_buf = ptr.c_str();
           }
-          r = ictx->block_cacher->read_buffer(ictx->block_cacher_id, p->first, p->second,
-                                              read_buf, comp_read, snap_id, op_flags);
-          if (r < 0)
-            goto done;
+          c->add_request();
+          ictx->block_cacher->read_buffer(ictx->block_cacher_id, p->first, p->second,
+                                          read_buf, comp_read, snap_id, op_flags);
         } else {
           Striper::file_to_extents(ictx->cct, ictx->format_string, &ictx->layout,
                                   p->first, len, 0, object_extents, buffer_ofs);
@@ -4152,6 +4151,8 @@ reprotect_and_return_err:
       }
     }
     c->read_buf_len = buffer_ofs;
+    if (ictx->block_cacher)
+      goto out;
 
     for (map<object_t,vector<ObjectExtent> >::iterator p = object_extents.begin();
          p != object_extents.end(); ++p) {
@@ -4179,6 +4180,7 @@ reprotect_and_return_err:
       }
     }
 
+ out:
     c->finish_adding_requests(cct);
     c->put();
 

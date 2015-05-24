@@ -146,6 +146,13 @@ public:
       snap_name = snap;
     memset(&header, 0, sizeof(header));
     memset(&layout, 0, sizeof(layout));
+
+    ThreadPoolSingleton *thread_pool_singleton;
+    cct->lookup_or_create_singleton_object<ThreadPoolSingleton>(
+      thread_pool_singleton, "librbd::thread_pool");
+    aio_work_queue = new ContextWQ("librbd::aio_work_queue",
+                                   cct->_conf->rbd_op_thread_timeout,
+                                   thread_pool_singleton);
   }
 
   ImageCtx::~ImageCtx() {

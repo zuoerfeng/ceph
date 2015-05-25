@@ -15,6 +15,10 @@
 #ifndef CEPH_UTIME_H
 #define CEPH_UTIME_H
 
+#ifdef DARWIN
+#undef _ANSI_SOURCE
+#define _DARWIN_C_SOURCE
+#endif
 #include <math.h>
 #include <sys/time.h>
 #include <time.h>

@@ -245,6 +245,7 @@ int GenericFileStoreBackend::do_fiemap(int fd, off_t start, size_t len, struct f
   int size;
   int ret;
 
+#ifndef DARWIN
   fiemap = (struct fiemap*)calloc(sizeof(struct fiemap), 1);
   if (!fiemap)
     return -ENOMEM;
@@ -285,6 +286,7 @@ int GenericFileStoreBackend::do_fiemap(int fd, off_t start, size_t len, struct f
   }
   *pfiemap = fiemap;
 
+#endif
   return 0;
 
 done_err:

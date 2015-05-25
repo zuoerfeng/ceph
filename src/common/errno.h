@@ -6,4 +6,7 @@
 /* Return a given error code as a string */
 std::string cpp_strerror(int err);
 
+#ifndef ERESTART
+#define ERESTART EINTR
+#endif
 #endif

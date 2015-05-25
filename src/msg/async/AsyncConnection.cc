@@ -232,7 +232,11 @@ int AsyncConnection::read_bulk(int fd, char *buf, int len)
 int AsyncConnection::do_sendmsg(struct msghdr &msg, int len, bool more)
 {
   while (len > 0) {
+#ifdef DARWIN
+    int r = ::sendmsg(sd, &msg, 0);
+#else
     int r = ::sendmsg(sd, &msg, MSG_NOSIGNAL | (more ? MSG_MORE : 0));
+#endif
 
     if (r == 0) {
       ldout(async_msgr->cct, 10) << __func__ << " sendmsg got r==0!" << dendl;

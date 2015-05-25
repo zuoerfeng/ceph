@@ -21,6 +21,11 @@
 #include "common/errno.h"
 #include "common/strtol.h"
 
+#ifdef DARWIN
+#include <sys/param.h>
+#include <sys/mount.h>
+#endif
+
 #ifdef HAVE_SYS_VFS_H
 #include <sys/vfs.h>
 #endif

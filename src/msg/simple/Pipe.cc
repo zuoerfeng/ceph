@@ -859,6 +859,7 @@ void Pipe::set_socket_options()
                          << ": " << cpp_strerror(errno) << dendl;
     }
 #endif
+#ifndef DARWIN
     // setsockopt(IPTOS_CLASS_CS6) sets the priority of the socket as 0.
     // See http://goo.gl/QWhvsD and http://goo.gl/laTbjT
     // We need to call setsockopt(SO_PRIORITY) after it.
@@ -867,6 +868,7 @@ void Pipe::set_socket_options()
       ldout(msgr->cct,0) << "couldn't set SO_PRIORITY to " << prio
                          << ": " << cpp_strerror(errno) << dendl;
     }
+#endif
   }
 }
 
@@ -2134,7 +2136,11 @@ int Pipe::do_sendmsg(struct msghdr *msg, int len, bool more)
       assert(l == len);
     }
 
+#ifdef DARWIN
+    int r = ::sendmsg(sd, msg, 0);
+#else
     int r = ::sendmsg(sd, msg, MSG_NOSIGNAL | (more ? MSG_MORE : 0));
+#endif
     if (r == 0) 
       ldout(msgr->cct,10) << "do_sendmsg hmm do_sendmsg got r==0!" << dendl;
     if (r < 0) { 

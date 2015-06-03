@@ -127,6 +127,7 @@ int BlockCacher::reg_region(uint64_t num_pages)
       ++num_free_data_pages;
       p->addr = data;
       p->page_next = free_data_pages_head;
+      p->position = FREE;
       free_data_pages_head = p;
       data += page_length;
     }
@@ -139,13 +140,15 @@ int BlockCacher::reg_region(uint64_t num_pages)
 
 // https://dl.dropboxusercontent.com/u/91714474/Papers/clockfast.pdf
 int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost_tree, Page **pages, bool hit[],
-                           size_t num_pages, size_t align_offset, bool only_hit)
+                           size_t num_pages, size_t align_offset, bool write, bool only_hit)
 {
   ldout(cct, 10) << __func__ << " " << num_pages << " pages, align_offset=" << align_offset << dendl;
 
-  while (num_pages + dirty_page_state.dirty_pages.read() + inflight_reading_pages >= total_half_pages
+  while (num_pages + dirty_page_state.dirty_pages.read() + inflight_writing_pages.read() + inflight_reading_pages >= total_half_pages
          && !only_hit) {
-    ldout(cct, 0) << __func__ << " can't provide with enough pages" << dendl;
+    ldout(cct, 0) << __func__ << " can't provide with enough(" << num_pages << ") pages," << " dirty_pages("
+                  << dirty_page_state.dirty_pages.read() << ") writing pages("
+                  << inflight_writing_pages.read() << ") reading pages(" << inflight_reading_pages << ") " << dendl;
     get_page_wait = true;
     tree_cond.Wait(tree_lock);
   }
@@ -165,6 +168,9 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
       pages[idx] = cur_page;
       hit[idx] = true;
       assert(idx < num_pages);
+      if (write && cur_page->position == ARC) {
+         car_state.make_dirty(cur_page);
+      }
       ldout(cct, 20) << __func__ << " hit cache page offset=" << cur_page->offset << dendl;
       hits++;
     } else {
@@ -204,6 +210,7 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
         ldout(cct, 20) << __func__ << " evicted page " << *p << dendl;
         tree->erase(p);
         ghost_tree->insert(p);
+        p->position = NO;
         cur_page = car_state.get_ghost_page(hit_ghost_history ? ghost_page : NULL); 
         if (cur_page) {
           ghost_tree->erase(cur_page);
@@ -213,6 +220,7 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
           cur_page->page_next = NULL;
         }
         cur_page->addr = p->addr;
+        cur_page->position = ARC;
       } else {
         uint32_t rps = MIN(remain_data_pages, region_maxpages);
         ldout(cct, 20) << __func__ << " no free data page, try to alloc a page region("
@@ -221,12 +229,14 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
         cur_page = free_data_pages_head;
         free_data_pages_head = free_data_pages_head->page_next;
         cur_page->page_next = NULL;
+        cur_page->position = ARC;
         --num_free_data_pages;
       }
     } else {
       cur_page = free_data_pages_head;
       free_data_pages_head = free_data_pages_head->page_next;
       cur_page->page_next = NULL;
+      cur_page->position = ARC;
       --num_free_data_pages;
     }
 
@@ -401,27 +411,50 @@ void BlockCacher::complete_read(C_BlockCacheRead *bc_read_comp, int r)
   }
 }
 
-void BlockCacher::complete_write(C_BlockCacheWrite *bc_write_comp, int r, bool noretry)
+void BlockCacher::complete_write(C_BlockCacheWrite *bc_write_comp, int r)
 {
   ldout(cct, 20) << __func__ << " r=" << r << dendl;
+  Page *page;
 
-  if (r < 0 && !noretry) {
+  if (r < 0) {
     ldout(cct, 10) << __func__ << " marking dirty again due to error "
                    << " r = " << r << " " << cpp_strerror(-r) << dendl;
-    Mutex::Locker l(flush_lock);
-    flush_retry_writes.push_back(bc_write_comp);
-    flush_cond.Signal();
+    {
+      Mutex::Locker l(dirty_page_lock);
+      for (vector<Page*>::iterator q = bc_write_comp->extent.page_extents.begin();
+           q != bc_write_comp->extent.page_extents.end(); ++q) {
+        dirty_page_state.mark_dirty(*q);
+      }
+    }
+
+    inflight_writing_pages.sub(bc_write_comp->extent.page_extents.size());
+    {
+      Mutex::Locker l(flush_lock);
+      wait_writeback.push_back(bc_write_comp);
+      flush_cond.Signal();
+    }
+    Mutex::Locker l(tree_lock);
+    if (get_page_wait) {
+      get_page_wait = false;
+      tree_cond.Signal();
+    }
     return ;
   }
 
   flush_lock.Lock();
-  ldout(cct, 20) << __func__ << " page size=" << bc_write_comp->extent.page_extents.size()
-                 << " inflight_writing_pages=" << inflight_writing_pages << dendl;
-  inflight_writing_pages -= bc_write_comp->extent.page_extents.size();
   if (!(--flush_commits[bc_write_comp->flush_id].first) && flush_id > bc_write_comp->flush_id) {
     ldout(cct, 5) << __func__ << " complete flush_id=" << bc_write_comp->flush_id << dendl;
     flush_commits[bc_write_comp->flush_id].second->complete(1);
     flush_commits.erase(bc_write_comp->flush_id);
+    for (map<uint64_t, pair<uint64_t, Context*> >::iterator it = flush_commits.begin();
+         it != flush_commits.end();) {
+      if (!it->second.first) {
+        it->second.second->complete(0);
+        flush_commits.erase(it++);
+      } else {
+        break;
+      }
+    }
   }
   if (max_writing_wait) {
     max_writing_wait = false;
@@ -430,6 +463,23 @@ void BlockCacher::complete_write(C_BlockCacheWrite *bc_write_comp, int r, bool n
   flush_lock.Unlock();
   ldout(cct, 20) << __func__ << " " << this << " complete request comp=" << bc_write_comp->comp << dendl;
   bc_write_comp->comp->complete_request(r);
+  Mutex::Locker l1(tree_lock);
+  Mutex::Locker l2(data_lock);
+  for (vector<Page*>::iterator q = bc_write_comp->extent.page_extents.begin();
+       q != bc_write_comp->extent.page_extents.end(); ++q) {
+    page = *q;
+    if (bc_write_comp->version >= page->version)
+      car_state.insert_page(page);
+  }
+
+  ldout(cct, 20) << __func__ << " page size=" << bc_write_comp->extent.page_extents.size()
+                 << " inflight_writing_pages=" << inflight_writing_pages.read() << dendl;
+  inflight_writing_pages.sub(bc_write_comp->extent.page_extents.size());
+
+  if (get_page_wait) {
+    get_page_wait = false;
+    tree_cond.Signal();
+  }
 }
 
 void BlockCacher::read_object_extents(ImageCtx *ictx, uint64_t offset, size_t len,
@@ -489,7 +539,6 @@ void BlockCacher::flush_object_extent(ImageCtx *ictx, map<object_t, vector<Objec
                                       BlockCacherCompletion *c, ::SnapContext &snapc, uint64_t v)
 {
   assert(data_lock.is_locked());
-  Page *page;
   ldout(cct, 10) << __func__ << dendl;
   for (map<object_t, vector<ObjectPage> >::iterator it = object_extents.begin();
        it != object_extents.end(); ++it) {
@@ -497,18 +546,15 @@ void BlockCacher::flush_object_extent(ImageCtx *ictx, map<object_t, vector<Objec
       C_BlockCacheWrite *bc_write_comp = new C_BlockCacheWrite(this, c, ictx, *p, flush_id, v);
       for (vector<Page*>::iterator q = p->page_extents.begin();
            q != p->page_extents.end(); ++q) {
-        page = *q;
-        page->version = v;
-        page->dirty = 0;
-        car_state.insert_page(page);
-        bc_write_comp->data.append(static_cast<const char*>(page->addr), page_length);
+        (*q)->position = WRITE_INFLIGHT;
+        bc_write_comp->data.append(static_cast<const char*>((*q)->addr), page_length);
       }
 
       {
         Mutex::Locker l(flush_lock);
         ldout(cct, 20) << __func__ << " page size=" << bc_write_comp->extent.page_extents.size()
-                       << " inflight_writing_pages=" << inflight_writing_pages << dendl;
-        inflight_writing_pages += bc_write_comp->extent.page_extents.size();
+                       << " inflight_writing_pages=" << inflight_writing_pages.read() << dendl;
+        inflight_writing_pages.add(bc_write_comp->extent.page_extents.size());
         flush_commits[flush_id].first++;
       }
       bc_write_comp->send_by_bc_write_comp(snapc);
@@ -555,14 +601,12 @@ void BlockCacher::flush_pages(uint32_t num, Context *c)
       comp->finish_adding_requests();
     }
   }
-  dirty_page_state.dirty_pages.sub(pages);
   dirty_page_lock.Unlock();
-  {
-    Mutex::Locker l(tree_lock);
-    if (get_page_wait) {
-      get_page_wait = false;
-      tree_cond.Signal();
-    }
+  dirty_page_state.dirty_pages.sub(pages);
+  Mutex::Locker l(tree_lock);
+  if (get_page_wait) {
+    get_page_wait = false;
+    tree_cond.Signal();
   }
 }
 
@@ -578,33 +622,8 @@ void BlockCacher::flusher_entry()
     else
       flush_cond.WaitInterval(cct, flush_lock, utime_t(1, 0));
 
-    while (!flush_retry_writes.empty()) {
-      ldout(cct, 10) << __func__ << " exist " << flush_retry_writes.size() << " retry writes" << dendl;
-      C_BlockCacheWrite *bc_write_comp = flush_retry_writes.front();
-      flush_retry_writes.pop_front();
-      bc_write_comp->ictx->snap_lock.get_read();
-      ::SnapContext snapc = bc_write_comp->ictx->snapc;
-      bc_write_comp->ictx->snap_lock.put_read();
-      data_lock.Lock();
-      Page *page;
-      uint64_t relative_offset = 0;
-      for (vector<Page*>::iterator it = bc_write_comp->extent.page_extents.begin();
-           it != bc_write_comp->extent.page_extents.end(); ++it, relative_offset+= page_length) {
-        page = *it;
-        if(page->version > bc_write_comp->version) {
-          ldout(cct, 20) << __func__ << " comp_write's version=" << bc_write_comp->version
-                         << " page's version=" << page->version << dendl;
-          bc_write_comp->data.copy_in(relative_offset, page_length, page->addr);
-        } else {
-          assert(page->version == bc_write_comp->version);
-        }
-      }
-      bc_write_comp->send_by_bc_write_comp(snapc);
-      data_lock.Unlock();
-    }
-
-    if (inflight_writing_pages >= max_writing_pages) {
-      ldout(cct, 5) << __func__ << " " << inflight_writing_pages << " >= " << max_writing_pages
+    if (inflight_writing_pages.read() >= max_writing_pages) {
+      ldout(cct, 5) << __func__ << " " << inflight_writing_pages.read() << " >= " << max_writing_pages
                     << "exceed max inflight writeback pages" << dendl;
       max_writing_wait = true;
       continue;
@@ -642,20 +661,17 @@ void BlockCacher::flusher_entry()
    * the rados reads do come back their callback will try to access the
    * no-longer-valid BlockCacher.
    */
-  while (inflight_writing_pages > 0) {
+  while (inflight_writing_pages.read() > 0) {
     ldout(cct, 10) << __func__ << " waiting for writing pages to complete. Number left: "
-                   << inflight_writing_pages << dendl;
+                   << inflight_writing_pages.read() << dendl;
     max_writing_wait = true;
     flush_cond.Wait(flush_lock);
   }
-
-  while (!flush_retry_writes.empty()) {
-    C_BlockCacheWrite *w = flush_retry_writes.front();
-    ldout(cct, 1) << __func__ << " still has retry write request " << w << dendl;
-    flush_retry_writes.pop_front();
-    flush_lock.Unlock();
-    complete_write(w, -EAGAIN, true);
-    flush_lock.Lock();
+  while (!wait_writeback.empty()) {
+    Context *c = wait_writeback.front();
+    wait_writeback.pop_front();
+    ldout(cct, 1) << __func__ << " still has context=" << c << " wait for writeback, complete it now" << dendl;
+    c->complete(-EAGAIN);
   }
 
   uint64_t last_flush_count = flush_commits[flush_id].first;
@@ -703,7 +719,7 @@ int BlockCacher::write_buffer(uint64_t ictx_id, uint64_t off, size_t len, const 
   {
     const char *buf = buffer;
     Mutex::Locker l1(tree_lock);
-    int r = get_pages(ictx_id, tree, ghost_tree, pages, hit, num_pages, align_offset);
+    int r = get_pages(ictx_id, tree, ghost_tree, pages, hit, num_pages, align_offset, true);
     assert(r == 0);
     uint64_t start_padding, end_len, end = off + len;
     size_t copy_size;
@@ -712,7 +728,7 @@ int BlockCacher::write_buffer(uint64_t ictx_id, uint64_t off, size_t len, const 
     ldout(cct, 20) << __func__ << " start_padding=" << start_padding << dendl;
     Mutex::Locker l2(dirty_page_lock);
     data_lock.Lock();
-    v = global_version++;
+    v = ++global_version;
     if (num_pages == 1) {
       end_len = end < pages[i]->offset + page_length ? end - off : page_length;
       ldout(cct, 15) << __func__ << " start offset=" << pages[i]->offset + start_padding
@@ -720,10 +736,6 @@ int BlockCacher::write_buffer(uint64_t ictx_id, uint64_t off, size_t len, const 
       memcpy(pages[i]->addr + start_padding, buf, end_len);
       assert(buf >= buffer && (buf + end_len) <= buffer + len);
     } else {
-      if (hit[i] && !pages[i]->dirty) {
-        ldout(cct, 20) << __func__ << " clean page=" << pages[i] << " dirtied" << dendl;
-        car_state.make_dirty(pages[i]);
-      }
       if (!wt)
         dirty_page_state.mark_dirty(pages[i]);
       copy_size = page_length - start_padding;
@@ -732,10 +744,6 @@ int BlockCacher::write_buffer(uint64_t ictx_id, uint64_t off, size_t len, const 
       buf += copy_size;
       pages[i]->version = v;
       for (i = 1; i < num_pages - 1; ++i, buf += page_length) {
-        if (hit[i] && !pages[i]->dirty) {
-          ldout(cct, 20) << __func__ << " clean page=" << pages[i] << " dirtied" << dendl;
-          car_state.make_dirty(pages[i]);
-        }
         memcpy(pages[i]->addr, buf, page_length);
         assert(buf >= buffer && (buf + page_length) <= buffer + len);
         if (!wt)
@@ -745,10 +753,6 @@ int BlockCacher::write_buffer(uint64_t ictx_id, uint64_t off, size_t len, const 
       end_len = end < pages[i]->offset + page_length ? end - pages[i]->offset : page_length;
       memcpy(pages[i]->addr, buf, end_len);
       assert(buf >= buffer && (buf + end_len) <= buffer + len);
-    }
-    if (hit[i] && !pages[i]->dirty) {
-      ldout(cct, 20) << __func__ << " clean page=" << pages[i] << " dirtied" << dendl;
-      car_state.make_dirty(pages[i]);
     }
     if (!wt)
       dirty_page_state.mark_dirty(pages[i]);
@@ -811,7 +815,7 @@ void BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
 
   {
     Mutex::Locker l(tree_lock);
-    r = get_pages(ictx_id, tree, ghost_tree, pages, hit, num_pages, align_offset);
+    r = get_pages(ictx_id, tree, ghost_tree, pages, hit, num_pages, align_offset, false);
     assert(r == 0);
     uint64_t start_padding, copy_size, end = offset + len;
     size_t i = 0;
@@ -824,6 +828,7 @@ void BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
         memcpy(buf, pages[i]->addr + start_padding, copy_size);
       } else {
         need_read[pages[i]->offset] = pages[i];
+        pages[i]->position = READ_INFLIGHT;
       }
     } else {
       copy_size = page_length - start_padding;
@@ -831,6 +836,7 @@ void BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
         memcpy(buf, pages[i]->addr + start_padding, copy_size);
       } else {
         need_read[pages[i]->offset] = pages[i];
+        pages[i]->position = READ_INFLIGHT;
       }
       buf += copy_size;
       for (i = 1; i < num_pages - 1; ++i, buf += page_length) {
@@ -838,6 +844,7 @@ void BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
           memcpy(buf, pages[i]->addr, page_length);
         } else {
           need_read[pages[i]->offset] = pages[i];
+          pages[i]->position = READ_INFLIGHT;
         }
       }
       if (hit[i]) {
@@ -845,6 +852,7 @@ void BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
         memcpy(buf, pages[i]->addr, copy_size);
       } else {
         need_read[pages[i]->offset] = pages[i];
+        pages[i]->position = READ_INFLIGHT;
       }
     }
     inflight_reading_pages += need_read.size();
@@ -908,10 +916,10 @@ void BlockCacher::discard(uint64_t ictx_id, uint64_t offset, size_t len)
   Page *pages[num_pages];
   bool hit[num_pages];
   Mutex::Locker l1(tree_lock);
-  int r = get_pages(ictx_id, tree, NULL, pages, hit, num_pages, align_offset, true);
+  int r = get_pages(ictx_id, tree, NULL, pages, hit, num_pages, align_offset, false, true);
   assert(r == 0);
   Mutex::Locker l2(data_lock);
-  uint64_t v = global_version++;
+  uint64_t v = ++global_version;
   for (uint64_t i = 0; i < num_pages; ++i) {
     if (hit[i]) {
       copied = MIN(end_len - zeroed, page_length);

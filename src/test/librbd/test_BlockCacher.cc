@@ -21,6 +21,7 @@
 #include <boost/random/uniform_int.hpp>
 #include <boost/random/binomial_distribution.hpp>
 
+#include "include/atomic.h"
 #include "include/rados/librados.h"
 #include "include/interval_set.h"
 #include "common/ceph_context.h"
@@ -178,7 +179,7 @@ class MockLibrbdThread : public MockThread {
         p.first->complete(0);
         lock.Lock();
       }
-      if (reads.empty() && writes.empty())
+      if (!done && reads.empty() && writes.empty())
         cond.Wait(lock);
     }
     return 0;
@@ -295,6 +296,7 @@ class SyntheticWorkload {
   vector<uint32_t> digests;
   vector<string> rand_data;
   Mutex lock;
+  atomic_t inflight_num;
   interval_set<uint64_t> inflight_offsets;
   set<Context*> inflight_ctxts;
   gen_type rng;
@@ -336,6 +338,7 @@ class SyntheticWorkload {
         delete buf;
       } else if (op == FLUSH_OP) {
       }
+      w->inflight_num.dec();
       w->inflight_ctxts.erase(this);
     }
   };
@@ -344,7 +347,7 @@ class SyntheticWorkload {
  public:
   static const int RANDOM_DATA_NUM = 100;
   SyntheticWorkload(BlockCacher *bc, int bs, int s):
-      block_cacher(bc), lock("SyntheticWorkload::lock"), rng(time(NULL)), bs(bs), max_size(s) {
+      block_cacher(bc), lock("SyntheticWorkload::lock"), inflight_num(0), rng(time(NULL)), bs(bs), max_size(s) {
     boost::uniform_int<> u(0, max_size/100 - 4096);
     char *data = new char[max_size/100];
     size_t len;
@@ -392,6 +395,7 @@ class SyntheticWorkload {
       RWLock::RLocker snap_locker(ictxs[id]->snap_lock);
       snap_id = ictxs[id]->snap_id;
     }
+    inflight_num.inc();
     block_cacher->read_buffer(ictxs[id]->block_cacher_id, offset, len, buf, ctx, snap_id, 0);
   }
 
@@ -413,6 +417,7 @@ class SyntheticWorkload {
     inflight_ctxts.insert(ctx);
     lock.Unlock();
     d.copy(buf, len, 0);
+    inflight_num.inc();
     block_cacher->write_buffer(ictxs[id]->block_cacher_id, offset, len, buf, ctx, 0, ictxs[id]->snapc);
   }
 
@@ -421,6 +426,7 @@ class SyntheticWorkload {
     SyntheticContext *ctx = new SyntheticContext(this, NULL, 0, 0, FLUSH_OP);
     inflight_ctxts.insert(ctx);
     lock.Unlock();
+    inflight_num.inc();
     block_cacher->user_flush(ctx);
   }
 
@@ -432,7 +438,7 @@ class SyntheticWorkload {
   void wait_for_done() {
     uint64_t i = 0;
     lock.Lock();
-    while (!inflight_offsets.empty()) {
+    while (inflight_num.read()) {
       lock.Unlock();
       usleep(1000*100);
       if (i++ % 50 == 0)
@@ -440,7 +446,7 @@ class SyntheticWorkload {
       lock.Lock();
     }
     lock.Unlock();
-    assert(inflight_ctxts.empty());
+    assert(inflight_ctxts.empty() && inflight_offsets.empty());
   }
 };
 

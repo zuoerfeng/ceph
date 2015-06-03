@@ -21,6 +21,15 @@
 #include "librbd/AioRequest.h"
 
 
+enum Position {
+  NO = 0,
+  FREE,
+  ARC,
+  DIRTY,
+  READ_INFLIGHT,
+  WRITE_INFLIGHT,
+};
+
 struct Page {
   RBNode rb;
   uint64_t offset;  // protected by "tree_lock"
@@ -30,6 +39,7 @@ struct Page {
   uint8_t reference;// protected by "car_state"
   uint8_t arc_idx;// protected by "car_state"
   uint8_t dirty;  // is protected by "dirty_page_lock"
+  enum Position position;
   char *addr;       // is protected by "data_lock"
   uint64_t version; // is protected by "data_lock"
   Page *page_prev, *page_next;
@@ -186,6 +196,7 @@ namespace librbd {
       // we already increase size in adjust/make_dirty call, we need to decrease one now
       assert(page->arc_idx < ARC_COUNT);
       --arc_list_size[page->arc_idx];
+      page->position = ARC;
       _append_page(page, page->arc_idx);
     }
 
@@ -305,8 +316,8 @@ namespace librbd {
 
     CARState car_state;
 
+    atomic_t inflight_writing_pages;
     Mutex dirty_page_lock;
-    uint32_t inflight_writing_pages;
     struct DirtyPageState {
       bool wt;
       Page *dirty_pages_head, *dirty_pages_foot;
@@ -338,6 +349,7 @@ namespace librbd {
           dirty_pages.inc();
         }
         assert(!p->page_prev && !p->page_next);
+        p->position = DIRTY;
         p->page_prev = dirty_pages_foot;
         if (dirty_pages_foot)
           dirty_pages_foot->page_next = p;
@@ -352,8 +364,10 @@ namespace librbd {
           sorted_flush[p->ictx_id][p->offset] = p;
           prev = p;
           p = p->page_next;
+          prev->dirty = 0;
           prev->page_next = prev->page_prev = NULL;
-          if (num && i++ > num)
+          i++;
+          if (num && i >= num)
             break;
         }
         dirty_pages_head = p;
@@ -441,7 +455,6 @@ namespace librbd {
     Mutex flush_lock;
     bool flusher_stop;
     uint64_t flush_id;
-    std::list<C_BlockCacheWrite*> flush_retry_writes;
     map<uint64_t, pair<uint64_t, Context*> > flush_commits;
     std::list<Context*> wait_writeback;
     bool max_writing_wait;
@@ -464,11 +477,11 @@ namespace librbd {
 
     int reg_region(uint64_t num_pages);
     void complete_read(C_BlockCacheRead *bc_read_comp, int r);
-    void complete_write(C_BlockCacheWrite *bc_write_comp, int r, bool noretry=false);
+    void complete_write(C_BlockCacheWrite *bc_write_comp, int r);
     void prepare_continuous_pages(ImageCtx *ictx, map<uint64_t, Page*> &flush_pages,
                                   map<object_t, vector<ObjectPage> > &object_extents);
     int get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost_tree, Page **pages,
-                  bool hit[], size_t page_size, size_t align_offset, bool only_hit=false);
+                  bool hit[], size_t page_size, size_t align_offset, bool write, bool only_hit=false);
     void read_object_extents(ImageCtx *ictx, uint64_t offset, size_t len,
                              map<object_t, vector<ObjectPage> > &object_extents,
                              char *buf, BlockCacherCompletion *c, uint64_t snap_id, uint64_t v);
@@ -481,8 +494,9 @@ namespace librbd {
       total_half_pages(0), region_maxpages(0), page_length(0), max_writing_pages(0), remain_data_pages(0),
       free_pages_head(NULL), free_data_pages_head(NULL), num_free_data_pages(0), get_page_wait(false),
       inflight_reading_pages(0), data_lock("BlockCacher::data_lock"),
-      global_version(0), car_state(c), dirty_page_lock("BlockCacher::dirty_page_lock"),
-      inflight_writing_pages(0), flush_lock("BlockCacher::BlockCacher"), flusher_stop(true),
+      global_version(1), car_state(c), inflight_writing_pages(0),
+      dirty_page_lock("BlockCacher::dirty_page_lock"),
+      flush_lock("BlockCacher::BlockCacher"), flusher_stop(true),
       flush_id(0), max_writing_wait(false), flusher_thread(this) {}
 
     ~BlockCacher() {
@@ -494,7 +508,6 @@ namespace librbd {
         flusher_thread.join();
       }
 
-      assert(flush_retry_writes.empty());
       assert(flush_commits.empty());
       assert(wait_writeback.empty());
       if (mock_thread) {
@@ -588,6 +601,15 @@ namespace librbd {
     }
     // purge.  non-blocking.  violently removes dirty buffers from cache.
     void purge(uint64_t ictx_id);
+    vector<int> print_usage() {
+      vector<int> u;
+      Page *p = all_pages;
+      for (uint64_t i = 0; i < total_half_pages * 2; ++i) {
+        u[p->position]++;
+        ++p;
+      }
+      return u;
+    }
 
     // uniq name for CephContext to distinguish differnt object
     static const string name;

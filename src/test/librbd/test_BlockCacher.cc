@@ -267,7 +267,7 @@ TEST_F(TestBlockCacher, BasicOps)
   ctx->wait();
   delete ctx;
 
-  for (int i = 0; i < unit*64; i+=unit) {
+  for (size_t i = 0; i < unit*64; i+=unit) {
     ctx = new C_SaferCond();
     block_cacher->read_buffer(ictx->block_cacher_id, i, unit, large_read_buf, ctx, snap_id, 0);
     ctx->wait();

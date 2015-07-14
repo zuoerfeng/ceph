@@ -83,7 +83,7 @@ inline Page* CARState::evict_data()
   return p;
 }
 
-inline void CARState::adjust_and_hold(Page *cur_page, int hit_ghost_history)
+void CARState::adjust_and_hold(Page *cur_page, int hit_ghost_history)
 {
   Mutex::Locker l(lock);
   if (hit_ghost_history == ARC_LRU_GHOST) {

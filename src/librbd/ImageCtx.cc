@@ -140,7 +140,7 @@ public:
       block_cacher_id(0), block_cacher(NULL),
       readahead(),
       total_bytes_read(0), copyup_finisher(NULL),
-      object_map(*this)
+      object_map(*this), aio_work_queue(NULL), op_work_queue(NULL)
   {
     if (snap)
       snap_name = snap;
@@ -153,6 +153,9 @@ public:
     aio_work_queue = new ContextWQ("librbd::aio_work_queue",
                                    cct->_conf->rbd_op_thread_timeout,
                                    thread_pool_singleton);
+    op_work_queue = new ContextWQ("librbd::op_work_queue",
+                                  cct->_conf->rbd_op_thread_timeout,
+                                  thread_pool_singleton);
   }
 
   ImageCtx::~ImageCtx() {

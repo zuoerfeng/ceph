@@ -146,7 +146,7 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
 
   while (num_pages + dirty_page_state.dirty_pages.read() + inflight_writing_pages.read() + inflight_reading_pages >= total_half_pages
          && !only_hit) {
-    ldout(cct, 0) << __func__ << " can't provide with enough(" << num_pages << ") pages," << " dirty_pages("
+    ldout(cct, 5) << __func__ << " can't provide with enough(" << num_pages << ") pages," << " dirty_pages("
                   << dirty_page_state.dirty_pages.read() << ") writing pages("
                   << inflight_writing_pages.read() << ") reading pages(" << inflight_reading_pages << ") " << dendl;
     get_page_wait = true;

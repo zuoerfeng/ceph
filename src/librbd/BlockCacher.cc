@@ -127,7 +127,7 @@ int BlockCacher::reg_region(uint64_t num_pages)
       ++num_free_data_pages;
       p->addr = data;
       p->page_next = free_data_pages_head;
-      p->position = FREE;
+      p->position = POSITION_FREE;
       free_data_pages_head = p;
       data += page_length;
     }
@@ -168,7 +168,7 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
       pages[idx] = cur_page;
       hit[idx] = true;
       assert(idx < num_pages);
-      if (write && cur_page->position == ARC) {
+      if (write && cur_page->position == POSITION_ARC) {
          car_state.make_dirty(cur_page);
       }
       ldout(cct, 20) << __func__ << " hit cache page offset=" << cur_page->offset << dendl;
@@ -210,7 +210,7 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
         ldout(cct, 20) << __func__ << " evicted page " << *p << dendl;
         tree->erase(p);
         ghost_tree->insert(p);
-        p->position = NO;
+        p->position = POSITION_NO;
         cur_page = car_state.get_ghost_page(hit_ghost_history ? ghost_page : NULL); 
         if (cur_page) {
           ghost_tree->erase(cur_page);
@@ -220,7 +220,7 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
           cur_page->page_next = NULL;
         }
         cur_page->addr = p->addr;
-        cur_page->position = ARC;
+        cur_page->position = POSITION_ARC;
       } else {
         uint32_t rps = MIN(remain_data_pages, region_maxpages);
         ldout(cct, 20) << __func__ << " no free data page, try to alloc a page region("
@@ -229,14 +229,14 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
         cur_page = free_data_pages_head;
         free_data_pages_head = free_data_pages_head->page_next;
         cur_page->page_next = NULL;
-        cur_page->position = ARC;
+        cur_page->position = POSITION_ARC;
         --num_free_data_pages;
       }
     } else {
       cur_page = free_data_pages_head;
       free_data_pages_head = free_data_pages_head->page_next;
       cur_page->page_next = NULL;
-      cur_page->position = ARC;
+      cur_page->position = POSITION_ARC;
       --num_free_data_pages;
     }
 
@@ -423,7 +423,7 @@ void BlockCacher::complete_write(C_BlockCacheWrite *bc_write_comp, int r)
       Mutex::Locker l(dirty_page_lock);
       for (vector<Page*>::iterator q = bc_write_comp->extent.page_extents.begin();
            q != bc_write_comp->extent.page_extents.end(); ++q) {
-        dirty_page_state.mark_dirty(*q);
+        dirty_page_state.mark_dirty(*q, 0, page_length);
       }
     }
 
@@ -546,7 +546,7 @@ void BlockCacher::flush_object_extent(ImageCtx *ictx, map<object_t, vector<Objec
       C_BlockCacheWrite *bc_write_comp = new C_BlockCacheWrite(this, c, ictx, *p, flush_id, v);
       for (vector<Page*>::iterator q = p->page_extents.begin();
            q != p->page_extents.end(); ++q) {
-        (*q)->position = WRITE_INFLIGHT;
+        (*q)->position = POSITION_WRITE_INFLIGHT;
         bc_write_comp->data.append(static_cast<const char*>((*q)->addr), page_length);
       }
 
@@ -734,28 +734,28 @@ int BlockCacher::write_buffer(uint64_t ictx_id, uint64_t off, size_t len, const 
       ldout(cct, 15) << __func__ << " start offset=" << pages[i]->offset + start_padding
                      << " length is " << end_len << dendl;
       memcpy(pages[i]->addr + start_padding, buf, end_len);
-      assert(buf >= buffer && (buf + end_len) <= buffer + len);
     } else {
-      if (!wt)
-        dirty_page_state.mark_dirty(pages[i]);
       copy_size = page_length - start_padding;
       memcpy(pages[i]->addr + start_padding, buf, copy_size);
       assert(buf >= buffer && (buf + copy_size) <= buffer + len);
       buf += copy_size;
       pages[i]->version = v;
+      if (!wt)
+        dirty_page_state.mark_dirty(pages[i], start_padding, copy_size);
       for (i = 1; i < num_pages - 1; ++i, buf += page_length) {
         memcpy(pages[i]->addr, buf, page_length);
         assert(buf >= buffer && (buf + page_length) <= buffer + len);
         if (!wt)
-          dirty_page_state.mark_dirty(pages[i]);
+          dirty_page_state.mark_dirty(pages[i], 0, page_length);
         pages[i]->version = v;
       }
       end_len = end < pages[i]->offset + page_length ? end - pages[i]->offset : page_length;
       memcpy(pages[i]->addr, buf, end_len);
       assert(buf >= buffer && (buf + end_len) <= buffer + len);
+      start_padding = 0;
     }
     if (!wt)
-      dirty_page_state.mark_dirty(pages[i]);
+      dirty_page_state.mark_dirty(pages[i], start_padding, end_len);
     pages[i]->version = v;
     // the pages outside of car_state will be back when flushing
   }
@@ -828,7 +828,7 @@ void BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
         memcpy(buf, pages[i]->addr + start_padding, copy_size);
       } else {
         need_read[pages[i]->offset] = pages[i];
-        pages[i]->position = READ_INFLIGHT;
+        pages[i]->position = POSITION_READ_INFLIGHT;
       }
     } else {
       copy_size = page_length - start_padding;
@@ -836,7 +836,7 @@ void BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
         memcpy(buf, pages[i]->addr + start_padding, copy_size);
       } else {
         need_read[pages[i]->offset] = pages[i];
-        pages[i]->position = READ_INFLIGHT;
+        pages[i]->position = POSITION_READ_INFLIGHT;
       }
       buf += copy_size;
       for (i = 1; i < num_pages - 1; ++i, buf += page_length) {
@@ -844,7 +844,7 @@ void BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
           memcpy(buf, pages[i]->addr, page_length);
         } else {
           need_read[pages[i]->offset] = pages[i];
-          pages[i]->position = READ_INFLIGHT;
+          pages[i]->position = POSITION_READ_INFLIGHT;
         }
       }
       if (hit[i]) {
@@ -852,7 +852,7 @@ void BlockCacher::read_buffer(uint64_t ictx_id, uint64_t offset, size_t len,
         memcpy(buf, pages[i]->addr, copy_size);
       } else {
         need_read[pages[i]->offset] = pages[i];
-        pages[i]->position = READ_INFLIGHT;
+        pages[i]->position = POSITION_READ_INFLIGHT;
       }
     }
     inflight_reading_pages += need_read.size();

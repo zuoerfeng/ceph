@@ -20,15 +20,29 @@
 #include "librbd/AioCompletion.h"
 #include "librbd/AioRequest.h"
 
+#define POSITION_NO 0
+#define POSITION_FREE 1
+#define POSITION_ARC 2
+#define POSITION_DIRTY 3
+#define POSITION_READ_INFLIGHT 4
+#define POSITION_WRITE_INFLIGHT 5
 
-enum Position {
-  NO = 0,
-  FREE,
-  ARC,
-  DIRTY,
-  READ_INFLIGHT,
-  WRITE_INFLIGHT,
+struct PagePatch {
+  uint16_t offset;
+  uint16_t len;
 };
+
+struct PageNode {
+  struct PagePatch patch;
+  struct PageNode *next;
+};
+
+#define PAGE_PATCH_UNIT (1 << 9)
+#define PAGE_PATCH_UNIT_MASK (~(PAGE_PATCH_UNIT - 1))
+
+#define DIRTY_MODE_NONE 0
+#define DIRTY_MODE_COMPLETE 1
+#define DIRTY_MODE_INCOMPLETE 2
 
 struct Page {
   RBNode rb;
@@ -38,11 +52,53 @@ struct Page {
   // data address is assigned(only replace)
   uint8_t reference;// protected by "car_state"
   uint8_t arc_idx;// protected by "car_state"
-  uint8_t dirty;  // is protected by "dirty_page_lock"
-  enum Position position;
+  uint8_t dirty_mode;  // is protected by "dirty_page_lock"
+  uint8_t inline_num_patches;
+  uint8_t position;
   char *addr;       // is protected by "data_lock"
   uint64_t version; // is protected by "data_lock"
   Page *page_prev, *page_next;
+#define INLINE_MAX_PATCHES 4
+  union {
+    PagePatch inline_patches[INLINE_MAX_PATCHES];
+    struct {
+      PageNode *patch_head;
+      uint64_t num_patches;
+    } linked_patches;
+  } patches;
+
+  void add_patch(uint16_t offset, uint16_t len) {
+    // A hint for seq read/write
+    if (inline_num_patches < INLINE_MAX_PATCHES) {
+      if (inline_num_patches && patches.inline_patches[0].offset + patches.inline_patches[0].len == offset) {
+        patches.inline_patches[0].len = patches.inline_patches[0].len + len;
+        return ;
+      }
+      patches.inline_patches[inline_num_patches].offset = offset;
+      patches.inline_patches[inline_num_patches].len = len;
+      ++inline_num_patches;
+    } else if (inline_num_patches == INLINE_MAX_PATCHES) {
+      PageNode *prev = NULL;
+      for (int i = 0; i < INLINE_MAX_PATCHES; ++i) {
+        struct PageNode *node = new PageNode;
+        node->patch = patches.inline_patches[i];
+        node->next = prev;
+        prev = node;
+      }
+      patches.linked_patches.patch_head = prev;
+      patches.linked_patches.num_patches = inline_num_patches;
+      ++inline_num_patches;
+    } else {
+      struct PageNode *node = patches.linked_patches.patch_head;
+      if (node->patch.offset + node->patch.len == offset) {
+        node->patch.len = node->patch.len + len;
+        return ;
+      }
+      node = new PageNode;
+      node->patch.offset = offset;
+      node->patch.len = len;
+    }
+  }
 };
 
 inline std::ostream& operator<<(std::ostream& out, const Page& page) {
@@ -135,7 +191,7 @@ namespace librbd {
       return p;
     }
     void _append_page(Page *page, uint8_t dst) {
-      assert(!page->dirty && !page->page_next && !page->page_prev);
+      assert(page->dirty_mode == DIRTY_MODE_NONE && !page->page_next && !page->page_prev);
       page->arc_idx = dst;
       if (arc_list_foot[dst])
         arc_list_foot[dst]->page_next = page;
@@ -196,7 +252,7 @@ namespace librbd {
       // we already increase size in adjust/make_dirty call, we need to decrease one now
       assert(page->arc_idx < ARC_COUNT);
       --arc_list_size[page->arc_idx];
-      page->position = ARC;
+      page->position = POSITION_ARC;
       _append_page(page, page->arc_idx);
     }
 
@@ -325,16 +381,23 @@ namespace librbd {
       uint32_t target_pages;
       uint32_t max_dirty_pages;   // if 0 means writethrough
       uint32_t writing_pages;
+      uint32_t page_length;
       utime_t max_dirty_age;
       DirtyPageState(): wt(true), dirty_pages_head(NULL), dirty_pages_foot(NULL),
-                        dirty_pages(0), target_pages(0), max_dirty_pages(0), writing_pages(0) {}
+                        dirty_pages(0), target_pages(0), max_dirty_pages(0), writing_pages(0), page_length(0) {}
       bool writethrough() const { return wt || !max_dirty_pages; }
       bool need_writeback() const { return dirty_pages.read() > target_pages; }
       uint32_t need_writeback_pages() const {
         return dirty_pages.read() > target_pages ? dirty_pages.read() - target_pages : 0;
       }
-      void mark_dirty(Page *p) {
-        if (p->dirty) {
+      void mark_dirty(Page *p, uint64_t offset, uint64_t len) {
+        if (p->dirty_mode == DIRTY_MODE_NONE) {
+          if (len == page_length)
+            p->dirty_mode = DIRTY_MODE_COMPLETE;
+          else
+            p->dirty_mode = DIRTY_MODE_INCOMPLETE;
+          dirty_pages.inc();
+        } else {
           if (p->page_prev)
             p->page_prev->page_next = p->page_next;
           else
@@ -344,12 +407,16 @@ namespace librbd {
           else
             dirty_pages_foot = p->page_prev;
           p->page_prev = p->page_next = NULL;
-        } else {
-          p->dirty = 1;
-          dirty_pages.inc();
+        }
+        assert(p->dirty_mode != DIRTY_MODE_NONE);
+        if (len != page_length && p->dirty_mode == DIRTY_MODE_INCOMPLETE) {
+          // Doesn't support unaligned io size
+          if (offset & ~PAGE_PATCH_UNIT_MASK || len & ~PAGE_PATCH_UNIT_MASK)
+            assert(0 == "unaligned io size");
+          p->add_patch(offset / PAGE_PATCH_UNIT, len / PAGE_PATCH_UNIT);
         }
         assert(!p->page_prev && !p->page_next);
-        p->position = DIRTY;
+        p->position = POSITION_DIRTY;
         p->page_prev = dirty_pages_foot;
         if (dirty_pages_foot)
           dirty_pages_foot->page_next = p;
@@ -364,7 +431,7 @@ namespace librbd {
           sorted_flush[p->ictx_id][p->offset] = p;
           prev = p;
           p = p->page_next;
-          prev->dirty = 0;
+          prev->dirty_mode = DIRTY_MODE_NONE;
           prev->page_next = prev->page_prev = NULL;
           i++;
           if (num && i >= num)
@@ -543,6 +610,7 @@ namespace librbd {
       dirty_page_state.target_pages = target_dirty / unit;
       dirty_page_state.max_dirty_pages = max_dirty / unit;
       dirty_page_state.max_dirty_age.set_from_double(dirty_age);
+      dirty_page_state.page_length = page_length;
       max_writing_pages = target_dirty / unit;
       car_state.set_lru_limit(remain_data_pages / 2);
       car_state.set_data_pages(remain_data_pages);

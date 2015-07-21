@@ -144,10 +144,10 @@ int BlockCacher::get_pages(uint16_t ictx_id, PageRBTree *tree, PageRBTree *ghost
 {
   ldout(cct, 10) << __func__ << " " << num_pages << " pages, align_offset=" << align_offset << dendl;
 
-  while (num_pages + dirty_page_state.dirty_pages.read() + inflight_writing_pages.read() + inflight_reading_pages >= total_half_pages
+  while (num_pages + dirty_page_state.num_dirty_pages.read() + inflight_writing_pages.read() + inflight_reading_pages >= total_half_pages
          && !only_hit) {
-    ldout(cct, 5) << __func__ << " can't provide with enough(" << num_pages << ") pages," << " dirty_pages("
-                  << dirty_page_state.dirty_pages.read() << ") writing pages("
+    ldout(cct, 5) << __func__ << " can't provide with enough(" << num_pages << ") pages," << " num_dirty_pages("
+                  << dirty_page_state.num_dirty_pages.read() << ") writing pages("
                   << inflight_writing_pages.read() << ") reading pages(" << inflight_reading_pages << ") " << dendl;
     get_page_wait = true;
     tree_cond.Wait(tree_lock);
@@ -263,9 +263,9 @@ void BlockCacher::complete_read(C_BlockCacheRead *bc_read_comp, int r)
 
   vector<Page*>::iterator page_it = bc_read_comp->extent.page_extents.begin();
   if (r < 0 && r != -ENOENT) {
-    ldout(cct, 1) << __func__ << " got r=" << r << " for ctxt=" << bc_read_comp->comp
-                  << " oustanding reads=" << bc_read_comp->comp << dendl;
+    ldout(cct, 1) << __func__ << " got r=" << r << " for ctxt=" << bc_read_comp->comp << dendl;
     for (size_t i = 0; i < bc_read_comp->extent.page_extents.size(); ++i, ++page_it) {
+      assert((*page_it)->position == POSITION_READ_INFLIGHT);
       car_state.insert_page(*page_it);
     }
   } else { // this was a sparse_read operation
@@ -409,6 +409,119 @@ void BlockCacher::complete_read(C_BlockCacheRead *bc_read_comp, int r)
     get_page_wait = false;
     tree_cond.Signal();
   }
+}
+
+void BlockCacher::complete_async_fetch(C_BlockCacheRead *bc_read_comp, int r)
+{
+  ldout(cct, 20) << __func__ << " r=" << r << dendl;
+
+  vector<Page*>::iterator page_it = bc_read_comp->extent.page_extents.begin();
+  if (r < 0 && r != -ENOENT) {
+    ldout(cct, 1) << __func__ << " got r=" << r << " for ctxt=" << bc_read_comp->comp << dendl;
+    for (size_t i = 0; i < bc_read_comp->extent.page_extents.size(); ++i, ++page_it) {
+      Mutex::Locker l(dirty_page_lock);
+      if ((*page_it)->position == POSITION_DIRTY) {
+        // Note: We just think request is write-ordered
+        dirty_page_state.mark_dirty(*page_it, 0, 0);
+      }
+    }
+  } else { // this was a sparse_read operation
+    // reads from the parent don't populate the m_ext_map and the overlap
+    // may not be the full buffer.  compensate here by filling in m_ext_map
+    // with the read extent when it is empty.
+    map<uint64_t, uint64_t> image_ext_map;
+    AioRead *req = bc_read_comp->req;
+    if (req->m_ext_map.empty())
+      req->m_ext_map[req->get_object_off()] = req->data().length();
+
+    uint64_t object_offset = bc_read_comp->extent.offset;
+    size_t num_pages = bc_read_comp->extent.page_extents.size(), i = 0;
+    uint64_t bl_offset = 0;
+    uint64_t page_left = page_length;
+    uint64_t page_int_offset = 0;
+    uint64_t copy_size, tlen, padding;
+    data_lock.Lock();
+    for (map<uint64_t, uint64_t>::iterator ext_it = req->m_ext_map.begin();
+         ext_it != req->m_ext_map.end(); ++ext_it) {
+      ldout(cct, 20) << __func__ << " ext_it = (" << ext_it->first << ", " << ext_it->second
+                     << ") page left offset " << page_int_offset << dendl;
+      // |-----------------<left ext_it>----------|
+      // |---------<page>-------------------------|
+      while (ext_it->first >= object_offset + page_int_offset + page_left) {
+        if ((*page_it)->position == POSITION_DIRTY)
+          (*page_it)->fill_rest(NULL, 0, page_length);
+        page_int_offset = 0;
+        page_left = page_length;
+        ++page_it;
+        object_offset += page_length;
+      }
+
+      // |--------------<padding><left ext_it>----------|
+      // |--------------<      page      >--------------------|
+      padding = ext_it->first - object_offset;
+      if (padding) {
+        if ((*page_it)->position == POSITION_DIRTY)
+          (*page_it)->fill_rest(NULL, page_int_offset, page_length);
+
+        page_int_offset += padding;
+        page_left -= padding;
+        object_offset += padding;
+      }
+
+      tlen = ext_it->second;
+      while (tlen) {
+        // |----------------<left ext_it>---<next ext>-----|
+        // |--------------<page-1>-------------------------|
+        // |--------------<       page-2      >------------|
+        // |--------------<     page-3    >----------------|
+        copy_size = MIN(page_left, tlen);
+        if ((*page_it)->position == POSITION_DIRTY) {
+          ldout(cct, 20) << __func__ << " data copy to page offset=" << (*page_it)->offset << dendl;
+          (*page_it)->fill_rest(req->data().get_contiguous(bl_offset, copy_size),
+                                page_int_offset, copy_size);
+          bl_offset += copy_size;
+        }
+        tlen -= copy_size;
+        if (page_left == copy_size) {
+          ++page_it;
+          page_left = page_length;
+          page_int_offset = 0;
+          object_offset += page_length;
+        } else {
+          page_left -= copy_size;
+          page_int_offset += copy_size;
+          object_offset += copy_size;
+        }
+      }
+    }
+    if (page_it != bc_read_comp->extent.page_extents.end()) {
+      ldout(cct, 20) << __func__ << " page left length " << page_left << dendl;
+      if (page_left) {
+        if ((*page_it)->position == POSITION_DIRTY)
+          (*page_it)->fill_rest(NULL, page_int_offset, page_left);
+        ++page_it;
+      }
+      while (i != num_pages) {
+        if ((*page_it)->position == POSITION_DIRTY) {
+          (*page_it)->fill_rest(NULL, 0, page_length);
+        }
+        ++page_it;
+      }
+    }
+    assert(page_it == bc_read_comp->extent.page_extents.end());
+    assert(i == bc_read_comp->extent.page_extents.size());
+
+    r = req->get_object_len();
+    data_lock.Unlock();
+    Mutex::Locker l(dirty_page_lock);
+    for (size_t i = 0; i < bc_read_comp->extent.page_extents.size(); ++i, ++page_it) {
+      if ((*page_it)->position == POSITION_DIRTY) {
+        // Note: We just think request is write-ordered
+        dirty_page_state.mark_dirty(*page_it, 0, page_length);
+      }
+    }
+  }
+  bc_read_comp->comp->complete_request(r);
 }
 
 void BlockCacher::complete_write(C_BlockCacheWrite *bc_write_comp, int r)
@@ -602,7 +715,7 @@ void BlockCacher::flush_pages(uint32_t num, Context *c)
     }
   }
   dirty_page_lock.Unlock();
-  dirty_page_state.dirty_pages.sub(pages);
+  dirty_page_state.num_dirty_pages.sub(pages);
   Mutex::Locker l(tree_lock);
   if (get_page_wait) {
     get_page_wait = false;
@@ -614,14 +727,31 @@ void BlockCacher::flusher_entry()
 {
   ldout(cct, 10) << __func__ << " start" << dendl;
   bool recheck = false;
-  uint32_t num_flush;
+  uint32_t num;
+  Page *incomplete_pages;
   flush_lock.Lock();
-  while (!flusher_stop) {
+  while (!flusher_stop || recheck) {
     if (recheck)
       recheck = false;
     else
       flush_cond.WaitInterval(cct, flush_lock, utime_t(1, 0));
 
+    // ensure no incomplete pages if finishing flush(flusher_stop is true)
+    while (1) {
+      map<uint16_t, map<uint64_t, Page*> > pages;
+      num = dirty_page_state.get_incomplete_pages(pages, 40);
+      if (num) {
+        C_AsyncFetch *c = new C_AsyncFetch(this, NULL);
+        BlockCacherCompletion *comp = new BlockCacherCompletion(c);
+        async_read_partial_pages(pages, comp);
+        comp->finish_adding_requests();
+      }
+      if (!flusher_stop || !num)
+        break;
+      while (dirty_page_state.num_incomplete_pages.read()) {
+        flush_cond.Wait(flush_lock);
+      }
+    }
     if (inflight_writing_pages.read() >= max_writing_pages) {
       ldout(cct, 5) << __func__ << " " << inflight_writing_pages.read() << " >= " << max_writing_pages
                     << "exceed max inflight writeback pages" << dendl;
@@ -634,15 +764,15 @@ void BlockCacher::flusher_entry()
       recheck = true;
     }
 
-    num_flush = dirty_page_state.need_writeback_pages();
+    num = dirty_page_state.need_writeback_pages();
     // Note: do we need to limit inflight dirty write? Since we already limit
     // inflight pages in "get_pages"
-    if (num_flush) {
+    if (num) {
       // flush some dirty pages
-      ldout(cct, 10) << __func__ << " flush_page=" << num_flush << dendl;
+      ldout(cct, 10) << __func__ << " flush_page=" << num << dendl;
       C_FlushWrite *c = new C_FlushWrite(this, NULL);
       flush_lock.Unlock();
-      flush_pages(num_flush, c);
+      flush_pages(num, c);
       flush_lock.Lock();
       recheck = true;
     }
@@ -689,6 +819,59 @@ void BlockCacher::flusher_entry()
   }
 
   ldout(cct, 10) << __func__ << " finish" << dendl;
+}
+
+void BlockCacher::async_read_partial_pages(map<uint16_t, map<uint64_t, Page*> > &pages, BlockCacherCompletion *comp)
+{
+  ldout(cct, 10) << __func__ << " do background async request " << comp << dendl;
+  ImageCtx *ictx;
+  uint64_t offset, len, snap_id;
+  vector<pair<uint64_t,uint64_t> > buffer_extents;
+  for (map<uint16_t, map<uint64_t, Page*> >::iterator it = pages.begin();
+       it != pages.end(); ++it) {
+    {
+      RWLock::RLocker l(ictx_management_lock);
+      ictx = registered_ictx[it->first];
+    }
+    if (!ictx) {
+      ldout(cct, 1) << __func__ << " ictx_id=" << it->first << " already unregistered,"
+                    << " discard dirty pages!" << dendl;
+      for (map<uint64_t, Page*>::iterator page_it = it->second.begin();
+           page_it != it->second.end(); ++page_it) {
+        Page *p = page_it->second;
+        car_state.insert_page(p);
+      }
+      dirty_page_state.num_dirty_pages.sub(it->second.size());
+      dirty_page_state.num_incomplete_pages.sub(it->second.size());
+    } else {
+      map<object_t, vector<ObjectPage> > object_extents;
+      prepare_continuous_pages(ictx, it->second, object_extents);
+      ictx->snap_lock.get_read();
+      snap_id = ictx->snap_id;
+      ictx->snap_lock.put_read();
+
+      for (map<object_t, vector<ObjectPage> >::iterator it = object_extents.begin();
+           it != object_extents.end(); ++it) {
+        for (vector<ObjectPage>::iterator p = it->second.begin(); p != it->second.end(); ++p) {
+          len = p->page_extents.size() * page_length;
+          assert(len);
+          offset = p->page_extents[0]->offset;
+          C_BlockCacheRead *bc_read_comp = new C_BlockCacheRead(this, comp, *p, offset, len, NULL, global_version);
+          ldout(cct, 15) << " oid " << p->oid << " " << p->offset << "~"
+                         << p->length << " read_comp=" << bc_read_comp << " from " << p->page_extents << dendl;
+
+          AioRead *req = new AioRead(ictx, p->oid.name, p->objectno, p->offset, p->length,
+                                     buffer_extents, snap_id, true, bc_read_comp, 0);
+          bc_read_comp->req = req;
+
+          if (mock_thread)
+            mock_thread->queue_read(req, p->oid.name);
+          else
+            req->send();
+        }
+      }
+    }
+  }
 }
 
 int BlockCacher::write_buffer(uint64_t ictx_id, uint64_t off, size_t len, const char *buffer,

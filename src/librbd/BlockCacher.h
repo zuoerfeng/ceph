@@ -11,9 +11,10 @@
 #ifndef CEPH_LIBRBD_BLOCKCACHE_H
 #define CEPH_LIBRBD_BLOCKCACHE_H
 
-#include <stdlib.h>
 #include <iostream>
 #include <list>
+#include <stdlib.h>
+#include <string.h>
 #include "include/Spinlock.h"
 #include "common/RBTree.h"
 #include "common/Mutex.h"
@@ -24,8 +25,9 @@
 #define POSITION_FREE 1
 #define POSITION_ARC 2
 #define POSITION_DIRTY 3
-#define POSITION_READ_INFLIGHT 4
-#define POSITION_WRITE_INFLIGHT 5
+#define POSITION_DIRTY_FETCH 4
+#define POSITION_READ_INFLIGHT 5
+#define POSITION_WRITE_INFLIGHT 6
 
 struct PagePatch {
   uint16_t offset;
@@ -33,12 +35,15 @@ struct PagePatch {
 };
 
 struct PageNode {
-  struct PagePatch patch;
-  struct PageNode *next;
+  PagePatch patch;
+  PageNode *next;
 };
 
-#define PAGE_PATCH_UNIT (1 << 9)
+#define PAGE_PATCH_UNIT_SHIFT (9)
+#define PAGE_PATCH_UNIT (1 << PAGE_PATCH_UNIT_SHIFT)
 #define PAGE_PATCH_UNIT_MASK (~(PAGE_PATCH_UNIT - 1))
+#define TO_PAGE_UNIT(raw) ((raw) >> PAGE_PATCH_UNIT_SHIFT)
+#define PAGE_UNIT_TO_REAL(unit) ((unit) << PAGE_PATCH_UNIT_SHIFT)
 
 #define DIRTY_MODE_NONE 0
 #define DIRTY_MODE_COMPLETE 1
@@ -53,7 +58,7 @@ struct Page {
   uint8_t reference;// protected by "car_state"
   uint8_t arc_idx;// protected by "car_state"
   uint8_t dirty_mode;  // is protected by "dirty_page_lock"
-  uint8_t inline_num_patches;
+  uint8_t inline_num_patches; // is protected by "dirty_page_lock"
   uint8_t position;
   char *addr;       // is protected by "data_lock"
   uint64_t version; // is protected by "data_lock"
@@ -63,40 +68,243 @@ struct Page {
     PagePatch inline_patches[INLINE_MAX_PATCHES];
     struct {
       PageNode *patch_head;
-      uint64_t num_patches;
+      uint64_t num_linked_patches;
     } linked_patches;
   } patches;
 
-  void add_patch(uint16_t offset, uint16_t len) {
-    // A hint for seq read/write
-    if (inline_num_patches < INLINE_MAX_PATCHES) {
-      if (inline_num_patches && patches.inline_patches[0].offset + patches.inline_patches[0].len == offset) {
-        patches.inline_patches[0].len = patches.inline_patches[0].len + len;
-        return ;
+  static bool merge_inline_patch(
+      uint16_t offset, uint16_t len, PagePatch inline_patches[], uint8_t &inline_num_patches) {
+    // [blank][large][middle][small]
+    //        |<- start from here
+    for (uint8_t i = INLINE_MAX_PATCHES - inline_num_patches; i < INLINE_MAX_PATCHES; ++i) {
+      uint16_t patch_end = inline_patches[i].offset + inline_patches[i].len;
+      uint16_t add_end = offset + len;
+      if (offset > patch_end) {
+        // |------------- patch -----------|
+        //                                    |-- len --|
+        // OR this is the last time, we need to migrate to get a new slot
+        if (inline_num_patches < INLINE_MAX_PATCHES)
+          memmove(&inline_patches[INLINE_MAX_PATCHES-inline_num_patches],
+                  &inline_patches[INLINE_MAX_PATCHES-inline_num_patches-1],
+                  (i-(INLINE_MAX_PATCHES-inline_num_patches))*sizeof(PagePatch));
+        else
+          return false;
+        inline_patches[i-1].offset = offset;
+        inline_patches[i-1].len = len;
+        ++inline_num_patches;
+      } else if (offset >= inline_patches[i].offset) {
+        if (add_end >= patch_end) {
+          // |------------- patch -----------|
+          //                         |-- len --|
+          inline_patches[i].len = patch_end + (add_end - patch_end);
+        } else if (offset + len < patch_end) {
+          // |------------- patch -----------|
+          //                   |-- len --|
+          // no need to change
+        }
+      } else if (add_end >= inline_patches[i].offset) {
+        //      |------------- patch -----------|
+        // |-- len --|
+        inline_patches[i].len += inline_patches[i].offset - offset;
+        inline_patches[i].offset = offset;
+        if (i + 1 < INLINE_MAX_PATCHES &&
+            inline_patches[i+1].offset + inline_patches[i+1].len > offset) {
+          // |--- patch[i+1] ---|     |------- patch -------|
+          //                  |-- len --|
+          inline_patches[i].offset = inline_patches[i+1].offset;
+          inline_patches[i].len = patch_end - inline_patches[i+1].offset;
+          memmove(&inline_patches[INLINE_MAX_PATCHES-inline_num_patches],
+                  &inline_patches[INLINE_MAX_PATCHES-inline_num_patches+1],
+                  (i-(INLINE_MAX_PATCHES-inline_num_patches)+1)*sizeof(PagePatch));
+        }
+      } else {
+        assert(add_end < patch_end);
+        continue;
       }
-      patches.inline_patches[inline_num_patches].offset = offset;
-      patches.inline_patches[inline_num_patches].len = len;
+      return true;
+    }
+    if (inline_num_patches < INLINE_MAX_PATCHES) {
+      if (inline_num_patches)
+        memmove(&inline_patches[INLINE_MAX_PATCHES-inline_num_patches],
+                &inline_patches[INLINE_MAX_PATCHES-inline_num_patches-1],
+                inline_num_patches*sizeof(PagePatch));
+      inline_patches[INLINE_MAX_PATCHES-1].offset = offset;
+      inline_patches[INLINE_MAX_PATCHES-1].len = len;
       ++inline_num_patches;
+      return true;
+    }
+    return false;
+  }
+  static void merge_linked_patch(uint16_t offset, uint16_t len, PageNode **head, uint64_t &nodes) {
+    // [blank][large][middle][small]
+    //        |<- start from here
+    uint16_t patch_end, add_end;
+    PageNode *next, *node = *head;
+    while (node) {
+      patch_end = node->patch.offset + node->patch.len;
+      add_end = node->patch.offset + node->patch.len;
+      next = node->next;
+      if (offset > patch_end) {
+        // |------------- patch -----------|
+        //                                    |-- len --|
+        break;
+      } else if (offset >= node->patch.offset) {
+        if (add_end >= patch_end) {
+          // |------------- patch -----------|
+          //                         |-- len --|
+          node->patch.len = patch_end + (add_end - patch_end);
+        } else if (offset + len < patch_end) {
+          // |------------- patch -----------|
+          //                   |-- len --|
+          // no need to change
+        }
+      } else if (add_end >= node->patch.offset) {
+        //      |------------- patch -----------|
+        // |-- len --|
+        node->patch.len += node->patch.offset - offset;
+        node->patch.offset = offset;
+        if (next && next->patch.offset + next->patch.len > offset) {
+          // |--- next ---|     |------- patch ------|
+          //             |-- len --|
+          node->patch.offset = next->patch.offset;
+          node->patch.len = patch_end - next->patch.offset;
+          node->next = next->next;
+          delete next;
+        }
+      } else {
+        assert(add_end < patch_end);
+        node = next;
+        continue;
+      }
+      return ;
+    }
+    PageNode *new_node = new PageNode;
+    new_node->patch.offset = offset;
+    new_node->patch.len = len;
+    new_node->next = *head;
+    *head = new_node;
+    ++nodes;
+  }
+  bool add_patch(uint64_t real_offset, uint64_t real_len, uint64_t real_page_length) {
+    uint16_t offset, len, page_length;
+    if (!real_offset && !real_len)
+      return false;
+    if (real_len == real_page_length) {
+      assert(!real_offset);
+      goto cleanup;
+    }
+    offset = TO_PAGE_UNIT(real_offset);
+    len = TO_PAGE_UNIT(real_len);
+    page_length = TO_PAGE_UNIT(real_page_length);
+    // A hint for seq read/write
+    if (inline_num_patches <= INLINE_MAX_PATCHES &&
+        merge_inline_patch(offset, len, patches.inline_patches, inline_num_patches)) {
+      if (inline_num_patches == 1 && patches.inline_patches[INLINE_MAX_PATCHES-1].offset == 0 && patches.inline_patches[INLINE_MAX_PATCHES-1].len == page_length)
+        goto cleanup;
     } else if (inline_num_patches == INLINE_MAX_PATCHES) {
       PageNode *prev = NULL;
       for (int i = 0; i < INLINE_MAX_PATCHES; ++i) {
-        struct PageNode *node = new PageNode;
+        PageNode *node = new PageNode;
         node->patch = patches.inline_patches[i];
         node->next = prev;
         prev = node;
       }
       patches.linked_patches.patch_head = prev;
-      patches.linked_patches.num_patches = inline_num_patches;
+      patches.linked_patches.num_linked_patches = inline_num_patches;
       ++inline_num_patches;
     } else {
-      struct PageNode *node = patches.linked_patches.patch_head;
-      if (node->patch.offset + node->patch.len == offset) {
-        node->patch.len = node->patch.len + len;
-        return ;
+      merge_linked_patch(offset, len, &patches.linked_patches.patch_head, patches.linked_patches.num_linked_patches);
+      PageNode *node = patches.linked_patches.patch_head;
+      if (patches.linked_patches.num_linked_patches == 1 &&
+          node->patch.offset == 0 && node->patch.len == page_length)
+        goto cleanup;
+    }
+
+    return false;
+
+   cleanup:
+    if (inline_num_patches > INLINE_MAX_PATCHES) {
+      PageNode *prev, *node = patches.linked_patches.patch_head;
+      while (node) {
+        prev = node;
+        node = node->next;
+        delete prev;
       }
-      node = new PageNode;
-      node->patch.offset = offset;
-      node->patch.len = len;
+    }
+    memset(&patches, 0, sizeof(patches));
+    inline_num_patches = 0;
+    return true;
+  }
+  void fill_rest(const char *data, uint64_t real_offset, uint64_t real_len) {
+    uint16_t data_off = 0;
+    uint16_t start = TO_PAGE_UNIT(real_offset);
+    uint16_t end = start + TO_PAGE_UNIT(real_len);
+    if (inline_num_patches <= INLINE_MAX_PATCHES) {
+      for (uint8_t i = INLINE_MAX_PATCHES - 1;
+           i >= INLINE_MAX_PATCHES - inline_num_patches; ++i) {
+        if (start < patches.inline_patches[i].offset) {
+          if (end < patches.inline_patches[i].offset) {
+            if (data)
+              memcpy(addr+PAGE_UNIT_TO_REAL(start),
+                     data+PAGE_UNIT_TO_REAL(data_off),
+                     PAGE_UNIT_TO_REAL(end - start));
+            else
+              memset(addr+PAGE_UNIT_TO_REAL(start), 0,
+                     PAGE_UNIT_TO_REAL(end - start));
+            start = end;
+            data_off += end - start;
+            break;
+          }
+          if (data)
+            memcpy(addr+PAGE_UNIT_TO_REAL(start),
+                   data+PAGE_UNIT_TO_REAL(data_off),
+                   PAGE_UNIT_TO_REAL(patches.inline_patches[i].offset - start));
+          else
+            memset(addr+PAGE_UNIT_TO_REAL(start), 0,
+                   PAGE_UNIT_TO_REAL(patches.inline_patches[i].offset - start));
+          start = patches.inline_patches[i].offset + patches.inline_patches[i].len;
+          data_off += patches.inline_patches[i].offset - start;
+        }
+        data_off += patches.inline_patches[i].offset + patches.inline_patches[i].len;
+      }
+    } else {
+      PageNode *node = patches.linked_patches.patch_head;
+      while (node) {
+        if (start < node->patch.offset) {
+          if (end < node->patch.offset) {
+            if (data)
+              memcpy(addr+PAGE_UNIT_TO_REAL(start),
+                     data+PAGE_UNIT_TO_REAL(data_off),
+                     PAGE_UNIT_TO_REAL(end - start));
+            else
+              memset(addr+PAGE_UNIT_TO_REAL(start), 0,
+                     PAGE_UNIT_TO_REAL(end - start));
+            start = end;
+            data_off += end - start;
+            break;
+          }
+          if (data)
+            memcpy(addr+PAGE_UNIT_TO_REAL(start),
+                   data+PAGE_UNIT_TO_REAL(data_off),
+                   PAGE_UNIT_TO_REAL(node->patch.offset - start));
+          else
+            memset(addr+PAGE_UNIT_TO_REAL(start), 0,
+                   PAGE_UNIT_TO_REAL(node->patch.offset - start));
+          start = node->patch.offset + node->patch.len;
+          data_off += node->patch.offset - start;
+        }
+        data_off += node->patch.offset + node->patch.len;
+        node = node->next;
+      }
+    }
+    if (start < end) {
+      if (data)
+        memcpy(addr+PAGE_UNIT_TO_REAL(start),
+               data+PAGE_UNIT_TO_REAL(data_off),
+               PAGE_UNIT_TO_REAL(end - start));
+      else
+        memset(addr+PAGE_UNIT_TO_REAL(start), 0,
+               PAGE_UNIT_TO_REAL(end - start));
     }
   }
 };
@@ -375,58 +583,94 @@ namespace librbd {
     atomic_t inflight_writing_pages;
     Mutex dirty_page_lock;
     struct DirtyPageState {
+      BlockCacher *block_cacher;
       bool wt;
-      Page *dirty_pages_head, *dirty_pages_foot;
-      atomic_t dirty_pages;
+      Page *complete_pages_head, *complete_pages_foot;
+      Mutex incomplete_pages_lock;
+      Page *incomplete_pages_head, *incomplete_pages_foot;
+      atomic_t num_dirty_pages; // contains full dirty page and incomplete dirty pages
+      // indicate the number of total incomplete_pages, contains
+      // "incomplete_pages_head" and inflight read pages
+      atomic_t num_incomplete_pages;
       uint32_t target_pages;
       uint32_t max_dirty_pages;   // if 0 means writethrough
-      uint32_t writing_pages;
       uint32_t page_length;
       utime_t max_dirty_age;
-      DirtyPageState(): wt(true), dirty_pages_head(NULL), dirty_pages_foot(NULL),
-                        dirty_pages(0), target_pages(0), max_dirty_pages(0), writing_pages(0), page_length(0) {}
+      bool stopping;
+      DirtyPageState(BlockCacher *bc):
+        block_cacher(NULL), wt(true), complete_pages_head(NULL), complete_pages_foot(NULL),
+        incomplete_pages_lock("BlockCacher::DirtyPageState::incomplete_pages_lock"),
+        num_dirty_pages(0), num_incomplete_pages(0),
+        target_pages(0), max_dirty_pages(0), page_length(0), stopping(false) {}
       bool writethrough() const { return wt || !max_dirty_pages; }
-      bool need_writeback() const { return dirty_pages.read() > target_pages; }
+      bool need_writeback() const { return num_dirty_pages.read() > target_pages; }
       uint32_t need_writeback_pages() const {
-        return dirty_pages.read() > target_pages ? dirty_pages.read() - target_pages : 0;
+        return num_dirty_pages.read() > target_pages ? num_dirty_pages.read() - target_pages : 0;
       }
       void mark_dirty(Page *p, uint64_t offset, uint64_t len) {
         if (p->dirty_mode == DIRTY_MODE_NONE) {
-          if (len == page_length)
+          if (len == page_length) {
             p->dirty_mode = DIRTY_MODE_COMPLETE;
-          else
+          } else {
             p->dirty_mode = DIRTY_MODE_INCOMPLETE;
-          dirty_pages.inc();
-        } else {
+            num_incomplete_pages.inc();
+          }
+          num_dirty_pages.inc();
+        } else if (p->dirty_mode == DIRTY_MODE_COMPLETE) {
           if (p->page_prev)
             p->page_prev->page_next = p->page_next;
           else
-            dirty_pages_head = p->page_next;
+            complete_pages_head = p->page_next;
           if (p->page_next)
             p->page_next->page_prev = p->page_prev;
           else
-            dirty_pages_foot = p->page_prev;
+            complete_pages_foot = p->page_prev;
           p->page_prev = p->page_next = NULL;
-        }
-        assert(p->dirty_mode != DIRTY_MODE_NONE);
-        if (len != page_length && p->dirty_mode == DIRTY_MODE_INCOMPLETE) {
+        } else { // assert(p->dirty_mode == DIRTY_MODE_NONE);
           // Doesn't support unaligned io size
           if (offset & ~PAGE_PATCH_UNIT_MASK || len & ~PAGE_PATCH_UNIT_MASK)
             assert(0 == "unaligned io size");
-          p->add_patch(offset / PAGE_PATCH_UNIT, len / PAGE_PATCH_UNIT);
+          if (p->add_patch(offset, len, page_length)) {
+            p->dirty_mode = DIRTY_MODE_COMPLETE;
+            num_incomplete_pages.dec();
+            if (stopping) {
+              Mutex::Locker l(block_cacher->flush_lock);
+              block_cacher->flush_cond.Signal();
+            }
+          } else {
+            if (p->page_prev)
+              p->page_prev->page_next = p->page_next;
+            else
+              incomplete_pages_head = p->page_next;
+            if (p->page_next)
+              p->page_next->page_prev = p->page_prev;
+            else
+              incomplete_pages_foot = p->page_prev;
+            p->page_prev = p->page_next = NULL;
+          }
         }
-        assert(!p->page_prev && !p->page_next);
         p->position = POSITION_DIRTY;
-        p->page_prev = dirty_pages_foot;
-        if (dirty_pages_foot)
-          dirty_pages_foot->page_next = p;
-        if (!dirty_pages_head)
-          dirty_pages_head = p;
-        dirty_pages_foot = p;
+        assert(!p->page_prev && !p->page_next);
+        if (p->dirty_mode == DIRTY_MODE_COMPLETE) {
+          p->page_prev = complete_pages_foot;
+          if (complete_pages_foot)
+            complete_pages_foot->page_next = p;
+          if (!complete_pages_head)
+            complete_pages_head = p;
+          complete_pages_foot = p;
+        } else {
+          Mutex::Locker l(incomplete_pages_lock);
+          p->page_prev = incomplete_pages_foot;
+          if (incomplete_pages_foot)
+            incomplete_pages_foot->page_next = p;
+          if (!incomplete_pages_head)
+            incomplete_pages_head = p;
+          incomplete_pages_foot = p;
+        }
       }
       uint32_t writeback_pages(map<uint16_t, map<uint64_t, Page*> > &sorted_flush, uint32_t num) {
         uint32_t i = 0;
-        Page *p = dirty_pages_head, *prev;
+        Page *p = complete_pages_head, *prev;
         while (p) {
           sorted_flush[p->ictx_id][p->offset] = p;
           prev = p;
@@ -437,11 +681,27 @@ namespace librbd {
           if (num && i >= num)
             break;
         }
-        dirty_pages_head = p;
-        if (dirty_pages_head)
-          dirty_pages_head->page_prev = NULL;
+        complete_pages_head = p;
+        if (complete_pages_head)
+          complete_pages_head->page_prev = NULL;
         else
-          dirty_pages_foot = NULL;
+          complete_pages_foot = NULL;
+        return i;
+      }
+      uint32_t get_incomplete_pages(map<uint16_t, map<uint64_t, Page*> > &pages, uint32_t size) {
+        Mutex::Locker l(incomplete_pages_lock);
+        Page *p = incomplete_pages_head;
+        Page *prev = p;
+        uint32_t i = 0;
+        while (i < size && p) {
+          pages[p->ictx_id][p->offset] = p;
+          p->page_next = p->page_prev = NULL;
+        }
+        incomplete_pages_head = p;
+        if (incomplete_pages_head)
+          incomplete_pages_head->page_prev = NULL;
+        else
+          incomplete_pages_foot = NULL;
         return i;
       }
       void set_writeback() {
@@ -466,7 +726,10 @@ namespace librbd {
       }
       virtual ~C_BlockCacheRead() {}
       virtual void finish(int r) {
-        block_cacher->complete_read(this, r);
+        if (start_buf)
+          block_cacher->complete_read(this, r);
+        else
+          block_cacher->complete_async_fetch(this, r);
       }
     };
     friend class C_BlockCacherRead;
@@ -501,6 +764,20 @@ namespace librbd {
       }
     };
     friend class C_BlockCacherWrite;
+
+    class C_AsyncFetch : public Context {
+      BlockCacher *block_cacher;
+      Context *c;
+
+     public:
+      C_AsyncFetch(BlockCacher *bc, Context *c): block_cacher(bc), c(c) {}
+      virtual ~C_AsyncFetch() {}
+      virtual void finish(int r) {
+        if (c)
+          c->complete(r);
+      }
+    };
+    friend class C_AsyncFetch;
 
     class C_FlushWrite : public Context {
       BlockCacher *block_cacher;
@@ -541,9 +818,11 @@ namespace librbd {
     void flusher_entry();
     void flush_object_extent(ImageCtx *ictx, map<object_t, vector<ObjectPage> > &object_extents,
                              BlockCacherCompletion *c, ::SnapContext &snapc, uint64_t v);
+    void async_read_partial_pages(map<uint16_t, map<uint64_t, Page*> > &pages, BlockCacherCompletion *comp);
 
     int reg_region(uint64_t num_pages);
     void complete_read(C_BlockCacheRead *bc_read_comp, int r);
+    void complete_async_fetch(C_BlockCacheRead *bc_read_comp, int r);
     void complete_write(C_BlockCacheWrite *bc_write_comp, int r);
     void prepare_continuous_pages(ImageCtx *ictx, map<uint64_t, Page*> &flush_pages,
                                   map<object_t, vector<ObjectPage> > &object_extents);
@@ -562,14 +841,14 @@ namespace librbd {
       free_pages_head(NULL), free_data_pages_head(NULL), num_free_data_pages(0), get_page_wait(false),
       inflight_reading_pages(0), data_lock("BlockCacher::data_lock"),
       global_version(1), car_state(c), inflight_writing_pages(0),
-      dirty_page_lock("BlockCacher::dirty_page_lock"),
+      dirty_page_lock("BlockCacher::dirty_page_lock"), dirty_page_state(this),
       flush_lock("BlockCacher::BlockCacher"), flusher_stop(true),
       flush_id(0), max_writing_wait(false), flusher_thread(this) {}
 
     ~BlockCacher() {
       if (flusher_thread.is_started()) {
-        flusher_stop = true;
         flush_lock.Lock();
+        flusher_stop = true;
         flush_cond.Signal();
         flush_lock.Unlock();
         flusher_thread.join();

@@ -320,15 +320,22 @@ bufferlist LMDBStore::to_bufferlist(string &in)
 
 int LMDBStore::split_key(string &in, string *prefix, string *key)
 {
-  string &in_prefix = in;
-  size_t prefix_len = in_prefix.find('\0');
-  if (prefix_len >= in_prefix.size())
+  size_t prefix_len = 0;
+  char* in_data = in.c_str();
+
+  // Find separator inside Slice
+  char* separator = (char*) memchr((void*)in_data, 1, in.size());
+  if (separator == NULL)
+     return -EINVAL;
+  prefix_len = size_t(separator - in_data);
+  if (prefix_len >= in.size())
     return -EINVAL;
 
+  // Fetch prefix and/or key directly from Slice
   if (prefix)
-    *prefix = string(in_prefix, 0, prefix_len);
+    *prefix = string(in_data, prefix_len);
   if (key)
-    *key= string(in_prefix, prefix_len + 1);
+    *key = string(separator+1, in.size()-prefix_len-1);
   return 0;
 }
 
@@ -446,6 +453,7 @@ int LMDBStore::LMDBWholeSpaceIteratorImpl::lower_bound(const string &prefix, con
   }
   return (rc == 0) ? 0 : 1;
 }
+
 bool LMDBStore::LMDBWholeSpaceIteratorImpl::valid()
 {
   if (invalid)
@@ -453,6 +461,7 @@ bool LMDBStore::LMDBWholeSpaceIteratorImpl::valid()
   int rc = mdb_cursor_get(cursor, NULL, NULL, MDB_GET_CURRENT);
   return (rc == 0) ? true : false;
 }
+
 int LMDBStore::LMDBWholeSpaceIteratorImpl::next()
 {
   int rc = 1;
@@ -463,6 +472,7 @@ int LMDBStore::LMDBWholeSpaceIteratorImpl::next()
   }
   return 0;
 }
+
 int LMDBStore::LMDBWholeSpaceIteratorImpl::prev()
 {
   int rc = 1;
@@ -473,6 +483,7 @@ int LMDBStore::LMDBWholeSpaceIteratorImpl::prev()
   }
   return 0;
 }
+
 string LMDBStore::LMDBWholeSpaceIteratorImpl::key()
 {
   string key, out_key;
@@ -485,6 +496,7 @@ string LMDBStore::LMDBWholeSpaceIteratorImpl::key()
   split_key(key, 0, &out_key);
   return out_key;
 }
+
 pair<string,string> LMDBStore::LMDBWholeSpaceIteratorImpl::raw_key()
 {
   string prefix, key, out;
@@ -497,6 +509,17 @@ pair<string,string> LMDBStore::LMDBWholeSpaceIteratorImpl::raw_key()
   split_key(out, &prefix, &key);
   return make_pair(prefix, key);
 }
+
+bool LMDBStore::LMDBWholeSpaceIteratorImpl::raw_key_is_prefixed(const string &prefix) {
+  // Look for "prefix\1" right in *keys_iter without making a copy
+  string key = *keys_iter;
+  if ((key.size() > prefix.length()) && (key[prefix.length()] == '\1')) {
+    return memcmp(key.c_str(), prefix.c_str(), prefix.length()) == 0;
+  } else {
+    return false;
+  }
+}
+
 bufferlist LMDBStore::LMDBWholeSpaceIteratorImpl::value()
 {
   MDB_val k, v;
@@ -508,6 +531,7 @@ bufferlist LMDBStore::LMDBWholeSpaceIteratorImpl::value()
   value = string((const char *)v.mv_data, v.mv_size);
   return to_bufferlist(value);
 }
+
 int LMDBStore::LMDBWholeSpaceIteratorImpl::status()
 {
   int rc = mdb_cursor_get(cursor, NULL, NULL, MDB_GET_CURRENT);
@@ -531,4 +555,3 @@ LMDBStore::WholeSpaceIterator LMDBStore::_get_iterator()
     new LMDBWholeSpaceIteratorImpl(this)
   );
 }
-

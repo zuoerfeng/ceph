@@ -231,10 +231,6 @@ if WITH_TCMALLOC_MINIMAL
 LIBPERFGLUE += -ltcmalloc_minimal
 endif # WITH_TCMALLOC_MINIMAL
 
-if WITH_LIBLMDB
-LIBOS += libos_lmdb.la
-endif # WITH_LIBLMDB
-
 if WITH_TCMALLOC
 LIBPERFGLUE += -ltcmalloc
 endif # WITH_TCMALLOC
@@ -264,6 +260,9 @@ LIBOSD += $(LIBOSD_TYPES) $(LIBOS_TYPES)
 # libkv/libos linking order is ornery
 if WITH_SLIBROCKSDB
 LIBKV += rocksdb/librocksdb.a
+endif
+if WITH_LIBLMDB
+LIBKV += libos_lmdb.la
 endif
 LIBKV += -lbz2 -lz -lleveldb -lsnappy
 LIBOS += $(LIBOS_TYPES) $(LIBKV)

@@ -37,4 +37,16 @@ libkv_a_LIBADD += -lkinetic_client -lprotobuf -lglog -lgflags libcrypto.a
 noinst_HEADERS += kv/KineticStore.h
 endif
 
+if WITH_LIBLMDB
+libkv_a_SOURCES += kv/LMDBStore.cc
+libkv_a_LIBADD += -llmdb
+noinst_HEADERS += kv/LMDBStore.h
+endif
+if WITH_SLIBLMDB
+libkv_a_SOURCES += kv/LMDBStore.cc
+libkv_a_CXXFLAGS += -I mdb/libraries/liblmdb -fPIC
+libkv_a_LIBADD += mdb/libraries/liblmdb/liblmdb.la
+noinst_HEADERS += kv/LMDBStore.h
+endif
+
 endif # ENABLE_SERVER

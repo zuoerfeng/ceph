@@ -79,21 +79,6 @@ noinst_HEADERS += \
 	os/XfsFileStoreBackend.h \
 	os/ZFSFileStoreBackend.h
 
-if WITH_LIBLMDB
-libos_lmdb_la_SOURCES = os/LMDBStore.cc
-libos_lmdb_la_CXXFLAGS =  ${AM_CXXFLAGS} ${LIBLMDB_CFLAGS}
-libos_lmdb_la_LIBADD = -llmdb
-noinst_LTLIBRARIES += libos_lmdb.la
-noinst_HEADERS += os/LMDBStore.h
-endif
-if WITH_SLIBLMDB
-libos_lmdb_la_SOURCES = os/LMDBStore.cc
-libos_la_CXXFLAGS += -I mdb/libraries/liblmdb
-libos_lmdb_la_CXXFLAGS =  ${AM_CXXFLAGS} ${LIBLMDB_CFLAGS} -I mdb/libraries/liblmdb
-libos_lmdb_la_LIBADD = mdb/libraries/liblmdb/liblmdb.la
-noinst_LTLIBRARIES += libos_lmdb.la
-noinst_HEADERS += os/LMDBStore.h
-endif
 if WITH_LIBZFS
 libos_zfs_a_SOURCES = os/ZFS.cc
 libos_zfs_a_CXXFLAGS = ${AM_CXXFLAGS} ${LIBZFS_CFLAGS}

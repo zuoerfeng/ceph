@@ -37,12 +37,14 @@ libkv_a_LIBADD += -lkinetic_client -lprotobuf -lglog -lgflags libcrypto.a
 noinst_HEADERS += kv/KineticStore.h
 endif
 
-if WITH_LIBLMDB
+if WITH_DLIBLMDB
 libkv_a_SOURCES += kv/LMDBStore.cc
 libkv_a_LIBADD += -llmdb
 noinst_HEADERS += kv/LMDBStore.h
 endif
 if WITH_SLIBLMDB
+mdb/libraries/liblmdb/liblmdb.la:
+	cd mdb/libraries/liblmdb && CXXFLAGS=-fPIC make -j$(shell nproc)
 libkv_a_SOURCES += kv/LMDBStore.cc
 libkv_a_CXXFLAGS += -I mdb/libraries/liblmdb -fPIC
 libkv_a_LIBADD += mdb/libraries/liblmdb/liblmdb.la

@@ -261,8 +261,8 @@ LIBOSD += $(LIBOSD_TYPES) $(LIBOS_TYPES)
 if WITH_SLIBROCKSDB
 LIBKV += rocksdb/librocksdb.a
 endif
-if WITH_LIBLMDB
-LIBKV += libos_lmdb.la
+if WITH_SLIBLMDB
+LIBKV += mdb/libraries/liblmdb/liblmdb.la
 endif
 LIBKV += -lbz2 -lz -lleveldb -lsnappy
 LIBOS += $(LIBOS_TYPES) $(LIBKV)

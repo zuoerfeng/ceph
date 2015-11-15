@@ -4,13 +4,13 @@
 #include <set>
 #include <map>
 #include <string>
-#include <tr1/memory>
 #include <errno.h>
 
 #include "lmdb.h"
 
 using std::string;
 #include "common/perf_counters.h"
+#include "common/debug.h"
 #include "KeyValueDB.h"
 #include "LMDBStore.h"
 
@@ -321,10 +321,10 @@ bufferlist LMDBStore::to_bufferlist(string &in)
 int LMDBStore::split_key(string &in, string *prefix, string *key)
 {
   size_t prefix_len = 0;
-  char* in_data = in.c_str();
+  const char* in_data = in.c_str();
 
   // Find separator inside Slice
-  char* separator = (char*) memchr((void*)in_data, 1, in.size());
+  char* separator = (char*) memchr((const void*)in_data, 1, in.size());
   if (separator == NULL)
      return -EINVAL;
   prefix_len = size_t(separator - in_data);
@@ -511,10 +511,17 @@ pair<string,string> LMDBStore::LMDBWholeSpaceIteratorImpl::raw_key()
 }
 
 bool LMDBStore::LMDBWholeSpaceIteratorImpl::raw_key_is_prefixed(const string &prefix) {
-  // Look for "prefix\1" right in *keys_iter without making a copy
-  string key = *keys_iter;
-  if ((key.size() > prefix.length()) && (key[prefix.length()] == '\1')) {
-    return memcmp(key.c_str(), prefix.c_str(), prefix.length()) == 0;
+  MDB_val k, v;
+
+  int rc = mdb_cursor_get(cursor, &k, &v, MDB_GET_CURRENT);
+  if (rc != 0) {
+    derr << __FILE__ << ":" << __LINE__ << " " << mdb_strerror(rc) << dendl;
+    return false;
+  }
+
+  const char* data = (const char*)k.mv_data;
+  if ((k.mv_size > prefix.length()) && (data[prefix.length()] == '\1')) {
+    return memcmp(data, prefix.c_str(), prefix.length()) == 0;
   } else {
     return false;
   }
@@ -551,7 +558,7 @@ string LMDBStore::past_prefix(const string &prefix)
 
 LMDBStore::WholeSpaceIterator LMDBStore::_get_iterator()
 {
-  return std::tr1::shared_ptr<KeyValueDB::WholeSpaceIteratorImpl>(
+  return std::shared_ptr<KeyValueDB::WholeSpaceIteratorImpl>(
     new LMDBWholeSpaceIteratorImpl(this)
   );
 }

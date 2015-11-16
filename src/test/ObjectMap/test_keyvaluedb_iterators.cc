@@ -26,7 +26,15 @@
 using namespace std;
 
 string store_path;
-const char* dbs[] = {"leveldb"};
+const char* dbs[] = {
+  "leveldb",
+#ifdef HAVE_LIBROCKSDB
+  "rocksdb",
+#endif
+#ifdef HAVE_LIBLMDB
+  "lmdb",
+#endif
+};
 
 class IteratorTest : public ::testing::TestWithParam<const char*>
 {

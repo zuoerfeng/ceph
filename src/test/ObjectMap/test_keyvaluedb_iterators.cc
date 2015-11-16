@@ -40,7 +40,14 @@ public:
 
     //LevelDBStore *db_ptr = new LevelDBStore(g_ceph_context, store_path);
     std::cout << "use key-value DB " << string(GetParam()) << std::endl;
-    KeyValueDB *db_ptr = KeyValueDB::create(g_ceph_context, string(GetParam()), store_path);
+    string path = store_path+"/"+GetParam();
+    int r = ::mkdir(path.c_str(), 0777);
+    if (r < 0 && errno != EEXIST) {
+      r = -errno;
+      cerr << __func__ << ": unable to create " << path << ": " << r << std::endl;
+      return;
+    }
+    KeyValueDB *db_ptr = KeyValueDB::create(g_ceph_context, string(GetParam()), path);
     assert(!db_ptr->create_and_open(std::cerr));
     db.reset(db_ptr);
     mock.reset(new KeyValueDBMemory());

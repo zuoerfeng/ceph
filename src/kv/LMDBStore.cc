@@ -324,7 +324,7 @@ int LMDBStore::split_key(string &in, string *prefix, string *key)
   const char* in_data = in.c_str();
 
   // Find separator inside Slice
-  char* separator = (char*) memchr((const void*)in_data, 1, in.size());
+  char* separator = (char*) memchr((const void*)in_data, 0, in.size());
   if (separator == NULL)
      return -EINVAL;
   prefix_len = size_t(separator - in_data);
@@ -520,7 +520,7 @@ bool LMDBStore::LMDBWholeSpaceIteratorImpl::raw_key_is_prefixed(const string &pr
   }
 
   const char* data = (const char*)k.mv_data;
-  if ((k.mv_size > prefix.length()) && (data[prefix.length()] == '\1')) {
+  if ((k.mv_size > prefix.length()) && (data[prefix.length()] == '\0')) {
     return memcmp(data, prefix.c_str(), prefix.length()) == 0;
   } else {
     return false;

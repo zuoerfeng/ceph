@@ -117,57 +117,6 @@ EventCenter::~EventCenter()
     free(file_events);
 }
 
-int EventCenter::create_file_event(int fd, int mask, callback_t cb)
-{
-  int r = 0;
-  Mutex::Locker l(file_lock);
-  if (fd >= nevent) {
-    int new_size = nevent << 2;
-    while (fd > new_size)
-      new_size <<= 2;
-    ldout(cct, 10) << __func__ << " event count exceed " << nevent << ", expand to " << new_size << dendl;
-    r = driver->resize_events(new_size);
-    if (r < 0) {
-      lderr(cct) << __func__ << " event count is exceed." << dendl;
-      return -ERANGE;
-    }
-    FileEvent *new_events = static_cast<FileEvent *>(realloc(file_events, sizeof(FileEvent)*new_size));
-    if (!new_events) {
-      lderr(cct) << __func__ << " failed to realloc file_events" << cpp_strerror(errno) << dendl;
-      return -errno;
-    }
-    file_events = new_events;
-    memset(file_events+nevent, 0, sizeof(FileEvent)*(new_size-nevent));
-    nevent = new_size;
-  }
-
-  EventCenter::FileEvent *event = _get_file_event(fd);
-  ldout(cct, 20) << __func__ << " create event started fd=" << fd << " mask=" << mask
-                 << " original mask is " << event->mask << dendl;
-  if (event->mask == mask)
-    return 0;
-
-  r = driver->add_event(fd, event->mask, mask);
-  if (r < 0) {
-    // Actually we don't allow any failed error code, caller doesn't prepare to
-    // handle error status. So now we need to assert failure here. In practice,
-    // add_event shouldn't report error, otherwise it must be a innermost bug!
-    assert(0 == "BUG!");
-    return r;
-  }
-
-  event->mask |= mask;
-  if (mask & EVENT_READABLE) {
-    event->read_cb = cb;
-  }
-  if (mask & EVENT_WRITABLE) {
-    event->write_cb = cb;
-  }
-  ldout(cct, 10) << __func__ << " create event end fd=" << fd << " mask=" << mask
-                 << " original mask is " << event->mask << dendl;
-  return 0;
-}
-
 void EventCenter::delete_file_event(int fd, int mask)
 {
   assert(fd >= 0);
@@ -199,36 +148,6 @@ void EventCenter::delete_file_event(int fd, int mask)
   event->mask = event->mask & (~mask);
   ldout(cct, 10) << __func__ << " delete event end fd=" << fd << " mask=" << mask
                  << " original mask is " << event->mask << dendl;
-}
-
-uint64_t EventCenter::create_time_event(uint64_t microseconds, callback_t cb)
-{
-  Mutex::Locker l(time_lock);
-  uint64_t id = time_event_next_id++;
-
-  ldout(cct, 10) << __func__ << " id=" << id << " trigger after " << microseconds << "us"<< dendl;
-  EventCenter::TimeEvent event;
-  utime_t expire;
-  struct timeval tv;
-
-  if (microseconds < 5) {
-    tv.tv_sec = 0;
-    tv.tv_usec = microseconds;
-  } else {
-    expire = ceph_clock_now(cct);
-    expire.copy_to_timeval(&tv);
-    tv.tv_sec += microseconds / 1000000;
-    tv.tv_usec += microseconds % 1000000;
-  }
-  expire.set_from_timeval(&tv);
-
-  event.id = id;
-  event.time_cb = cb;
-  time_events[expire].push_back(event);
-  if (expire < next_time)
-    wakeup();
-
-  return id;
 }
 
 // TODO: Ineffective implementation now!
@@ -405,12 +324,4 @@ int EventCenter::process_events(int timeout_microseconds)
     }
   }
   return numevents;
-}
-
-void EventCenter::dispatch_event_external(callback_t e)
-{
-  external_lock.Lock();
-  external_events.push_back(e);
-  external_lock.Unlock();
-  wakeup();
 }

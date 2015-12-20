@@ -88,7 +88,7 @@ class EventCenter {
     uint64_t id;
     callback_t time_cb;
 
-    TimeEvent(): id(0) {}
+    TimeEvent(uint64_t i, callback_t cb): id(id), time_cb(std::move(cb)) {}
   };
 
   CephContext *cct;
@@ -137,15 +137,97 @@ class EventCenter {
   pthread_t get_owner() { return owner; }
 
   // Used by internal thread
-  int create_file_event(int fd, int mask, callback_t cb);
-  uint64_t create_time_event(uint64_t milliseconds, callback_t callback);
+  template <typename Func>
+  int create_file_event(int fd, int mask, Func &&cb);
+  template <typename Func>
+  uint64_t create_time_event(uint64_t milliseconds, Func &&callback);
   void delete_file_event(int fd, int mask);
   void delete_time_event(uint64_t id);
   int process_events(int timeout_microseconds);
   void wakeup();
 
   // Used by external thread
-  void dispatch_event_external(callback_t e);
+  template <typename Func>
+  void dispatch_event_external(Func &&e) {
+    external_lock.Lock();
+    external_events.emplace_back(std::move(e));
+    external_lock.Unlock();
+    wakeup();
+  }
 };
+
+template <typename Func>
+int EventCenter::create_file_event(int fd, int mask, Func &&cb)
+{
+  assert(!(mask & EVENT_READABLE && mask & EVENT_WRITABLE));
+  int r = 0;
+  Mutex::Locker l(file_lock);
+  if (fd >= nevent) {
+    int new_size = nevent << 2;
+    while (fd > new_size)
+      new_size <<= 2;
+    r = driver->resize_events(new_size);
+    if (r < 0) {
+      return -ERANGE;
+    }
+    FileEvent *new_events = static_cast<FileEvent *>(realloc(file_events, sizeof(FileEvent)*new_size));
+    if (!new_events) {
+      return -errno;
+    }
+    file_events = new_events;
+    memset(file_events+nevent, 0, sizeof(FileEvent)*(new_size-nevent));
+    nevent = new_size;
+  }
+
+  EventCenter::FileEvent *event = _get_file_event(fd);
+  if (event->mask == mask)
+    return 0;
+
+  r = driver->add_event(fd, event->mask, mask);
+  if (r < 0) {
+    // Actually we don't allow any failed error code, caller doesn't prepare to
+    // handle error status. So now we need to assert failure here. In practice,
+    // add_event shouldn't report error, otherwise it must be a innermost bug!
+    assert(0 == "BUG!");
+    return r;
+  }
+
+  event->mask |= mask;
+  if (mask & EVENT_READABLE) {
+    event->read_cb = std::move(cb);
+  } else if (mask & EVENT_WRITABLE) {
+    event->write_cb = std::move(cb);
+  }
+  return 0;
+}
+
+
+template <typename Func>
+uint64_t EventCenter::create_time_event(uint64_t microseconds, Func &&cb)
+{
+  Mutex::Locker l(time_lock);
+  uint64_t id = time_event_next_id++;
+
+  utime_t expire;
+  struct timeval tv;
+
+  if (microseconds < 5) {
+    tv.tv_sec = 0;
+    tv.tv_usec = microseconds;
+  } else {
+    expire = ceph_clock_now(cct);
+    expire.copy_to_timeval(&tv);
+    tv.tv_sec += microseconds / 1000000;
+    tv.tv_usec += microseconds % 1000000;
+  }
+  expire.set_from_timeval(&tv);
+
+  time_events[expire].emplace_back(id, std::move(cb));
+  if (expire < next_time)
+    wakeup();
+
+  return id;
+}
+
 
 #endif

@@ -79,14 +79,13 @@ AsyncConnection::AsyncConnection(CephContext *cct, AsyncMessenger *m, EventCente
     recv_start(0), recv_end(0), got_bad_auth(false), authorizer(NULL), replacing(false),
     is_reset_from_peer(false), once_ready(false), state_buffer(NULL), state_offset(0), net(cct), center(c)
 {
-  read_handler = [this]() { process(); }
-  write_handler = [this]() { handle_write(); }
-  reset_handler = [this]() { async_msgr->ms_deliver_handle_reset(this.get()); }
-  remote_reset_handler = [this]() { async_msgr->ms_deliver_handle_remote_reset(this.get()); }
-  connect_handler = [this]() { async_msgr->ms_deliver_handle_connect(this.get());}
-  local_deliver_handler = { local_deliver(); }
-
-  wakeup_handler = [this]() {
+  read_handler = [this](uint64_t id) { process(); };
+  write_handler = [this](uint64_t id) { handle_write(); };
+  reset_handler = [this](uint64_t id) { async_msgr->ms_deliver_handle_reset(this); };
+  remote_reset_handler = [this](uint64_t id) { async_msgr->ms_deliver_handle_remote_reset(this); };
+  connect_handler = [this](uint64_t id) { async_msgr->ms_deliver_handle_connect(this); };
+  local_deliver_handler = [this](uint64_t id) { local_deliver(); };
+  wakeup_handler = [this](uint64_t id) {
     lock.Lock();
     register_time_events.erase(id);
     lock.Unlock();
@@ -838,7 +837,7 @@ void AsyncConnection::process()
             lock.Lock();
           } else {
             center->dispatch_event_external(
-                [this, m]() { async_msgr->ms_deliver_dispatch(m); }
+                [this, message](uint64_t id) { async_msgr->ms_deliver_dispatch(message); });
           }
           logger->inc(l_msgr_recv_messages);
           logger->inc(l_msgr_recv_bytes, message_size + sizeof(ceph_msg_header) + sizeof(ceph_msg_footer));
@@ -1866,7 +1865,7 @@ int AsyncConnection::handle_connect_msg(ceph_msg_connect &connect, bufferlist &a
 
   // notify
   center->dispatch_event_external(
-      [this]() { async_msgr->ms_deliver_handle_accept(this.get()) };
+      [this](uint64_t id) { async_msgr->ms_deliver_handle_accept(this); });
   async_msgr->ms_deliver_handle_fast_accept(this);
   once_ready = true;
 
@@ -2184,9 +2183,9 @@ void AsyncConnection::_stop()
        it != register_time_events.end(); ++it)
     center->delete_time_event(*it);
   // Make sure in-queue events will been processed
-  this.get();
+  AsyncConnectionRef conn = this;
   center->dispatch_event_external(
-      [this]() {this.put()};
+      [=](uint64_t id) mutable { conn.reset(); });
 }
 
 void AsyncConnection::prepare_send_message(uint64_t features, Message *m, bufferlist &bl)

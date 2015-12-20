@@ -86,18 +86,18 @@ int EventCenter::init(int n)
   memset(file_events, 0, sizeof(FileEvent)*n);
 
   nevent = n;
-  auto notify_cb = [this]() {
+  auto notify_cb = [this](uint64_t id) {
     char c[256];
     int r;
     do {
       already_wakeup.set(0);
-      r = read(fd_or_id, c, sizeof(c));
+      r = read(id, c, sizeof(c));
       if (r < 0) {
         ldout(cct, 1) << __func__ << " read notify pipe failed: " << cpp_strerror(errno) << dendl;
         break;
       }
     } while (already_wakeup.read());
-  }
+  };
 
   create_file_event(notify_receive_fd, EVENT_READABLE, notify_cb);
   return 0;
@@ -190,10 +190,10 @@ void EventCenter::delete_file_event(int fd, int mask)
   }
 
   if (mask & EVENT_READABLE && event->read_cb) {
-    event->read_cb.reset();
+    event->read_cb = nullptr;
   }
   if (mask & EVENT_WRITABLE && event->write_cb) {
-    event->write_cb.reset();
+    event->write_cb = nullptr;
   }
 
   event->mask = event->mask & (~mask);
@@ -201,7 +201,7 @@ void EventCenter::delete_file_event(int fd, int mask)
                  << " original mask is " << event->mask << dendl;
 }
 
-uint64_t EventCenter::create_time_event(uint64_t microseconds, callback_t &&cb)
+uint64_t EventCenter::create_time_event(uint64_t microseconds, callback_t cb)
 {
   Mutex::Locker l(time_lock);
   uint64_t id = time_event_next_id++;
@@ -378,11 +378,9 @@ int EventCenter::process_events(int timeout_microseconds)
     }
 
     if (event->mask & fired_events[j].mask & EVENT_WRITABLE) {
-      if (!rfired || event->read_cb != event->write_cb) {
-        file_lock.Unlock();
-        event->write_cb(fired_events[j].fd);
-        file_lock.Lock();
-      }
+      file_lock.Unlock();
+      event->write_cb(fired_events[j].fd);
+      file_lock.Lock();
     }
 
     ldout(cct, 20) << __func__ << " event_wq process is " << fired_events[j].fd << " mask is " << fired_events[j].mask << dendl;
@@ -402,7 +400,7 @@ int EventCenter::process_events(int timeout_microseconds)
     while (!cur_process.empty()) {
       callback_t e = cur_process.front();
       if (e)
-        e->do_request(0);
+        e(0);
       cur_process.pop_front();
     }
   }

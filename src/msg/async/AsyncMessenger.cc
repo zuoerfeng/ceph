@@ -221,7 +221,7 @@ int Processor::start(Worker *w)
   // start thread
   if (listen_sd >= 0) {
     worker = w;
-    w->center.create_file_event(listen_sd, EVENT_READABLE, [this](){ this->accept(); }
+    w->center.create_file_event(listen_sd, EVENT_READABLE, [this](uint64_t id){ this->accept(); });
   }
 
   return 0;
@@ -357,11 +357,11 @@ void WorkerPool::barrier()
     assert(cur != (*it)->center.get_owner());
     barrier_count.inc();
     (*it)->center.dispatch_event_external(
-        [this]() {
+        [this](uint64_t id) {
           Mutex::Locker l(barrier_lock);
           barrier_count.dec();
           barrier_cond.Signal();
-        })
+        });
   }
   ldout(cct, 10) << __func__ << " wait for " << barrier_count.read() << " barrier" << dendl;
   Mutex::Locker l(barrier_lock);

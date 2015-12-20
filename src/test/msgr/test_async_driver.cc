@@ -250,7 +250,7 @@ TEST(EventCenterTest, FileEventExpansion) {
   center.init(100);
   for (int i = 0; i < 300; i++) {
     int sd = ::socket(AF_INET, SOCK_STREAM, 0);
-    center.create_file_event(sd, EVENT_READABLE, []() {});
+    center.create_file_event(sd, EVENT_READABLE, [](uint64_t id) {});
     sds.push_back(sd);
   }
 
@@ -287,7 +287,7 @@ TEST(EventCenterTest, DispatchTest) {
   Cond cond;
   worker1.create();
   worker2.create();
-  auto cb = [&lock, &count, &cond]() {
+  auto cb = [&lock, &count, &cond](uint64_t id) {
     lock.Lock();
     count.dec();
     cond.Signal();

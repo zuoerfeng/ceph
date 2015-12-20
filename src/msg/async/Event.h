@@ -72,12 +72,11 @@ class EventDriver {
 };
 
 
+using callback_t = std::function<void(uint64_t)>;
 /*
  * EventCenter maintain a set of file descriptor and handle registered events.
  */
 class EventCenter {
-  using callback_t = std::function<void()>;
-
   struct FileEvent {
     int mask;
     callback_t read_cb;
@@ -139,7 +138,7 @@ class EventCenter {
 
   // Used by internal thread
   int create_file_event(int fd, int mask, callback_t cb);
-  uint64_t create_time_event(uint64_t milliseconds, callback_t &&callback);
+  uint64_t create_time_event(uint64_t milliseconds, callback_t callback);
   void delete_file_event(int fd, int mask);
   void delete_time_event(uint64_t id);
   int process_events(int timeout_microseconds);

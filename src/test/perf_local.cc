@@ -489,7 +489,7 @@ double eventcenter_dispatch()
   CenterWorker worker(g_ceph_context);
   atomic_t flag(1);
   worker.create();
-  auto cb = [&flag]() { flag.dec(); }
+  auto cb = [&flag](uint64_t id) { flag.dec(); }
 
   worker.center.dispatch_event_external(count_event);
   // Start a new thread and wait for it to ready.

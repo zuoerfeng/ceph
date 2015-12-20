@@ -32,28 +32,6 @@
 #define dout_subsys ceph_subsys_ms
 
 #undef dout_prefix
-#define dout_prefix *_dout << "EventCallback "
-class C_handle_notify : public EventCallback {
-  EventCenter *center;
-  CephContext *cct;
-
- public:
-  C_handle_notify(EventCenter *c, CephContext *cc): center(c), cct(cc) {}
-  void do_request(int fd_or_id) {
-    char c[256];
-    int r;
-    do {
-      center->already_wakeup.set(0);
-      r = read(fd_or_id, c, sizeof(c));
-      if (r < 0) {
-        ldout(cct, 1) << __func__ << " read notify pipe failed: " << cpp_strerror(errno) << dendl;
-        break;
-      }
-    } while (center->already_wakeup.read());
-  }
-};
-
-#undef dout_prefix
 #define dout_prefix _event_prefix(_dout)
 
 ostream& EventCenter::_event_prefix(std::ostream *_dout)
@@ -108,7 +86,20 @@ int EventCenter::init(int n)
   memset(file_events, 0, sizeof(FileEvent)*n);
 
   nevent = n;
-  create_file_event(notify_receive_fd, EVENT_READABLE, EventCallbackRef(new C_handle_notify(this, cct)));
+  auto notify_cb = [this]() {
+    char c[256];
+    int r;
+    do {
+      already_wakeup.set(0);
+      r = read(fd_or_id, c, sizeof(c));
+      if (r < 0) {
+        ldout(cct, 1) << __func__ << " read notify pipe failed: " << cpp_strerror(errno) << dendl;
+        break;
+      }
+    } while (already_wakeup.read());
+  }
+
+  create_file_event(notify_receive_fd, EVENT_READABLE, notify_cb);
   return 0;
 }
 
@@ -126,7 +117,7 @@ EventCenter::~EventCenter()
     free(file_events);
 }
 
-int EventCenter::create_file_event(int fd, int mask, EventCallbackRef ctxt)
+int EventCenter::create_file_event(int fd, int mask, callback_t cb)
 {
   int r = 0;
   Mutex::Locker l(file_lock);
@@ -167,10 +158,10 @@ int EventCenter::create_file_event(int fd, int mask, EventCallbackRef ctxt)
 
   event->mask |= mask;
   if (mask & EVENT_READABLE) {
-    event->read_cb = ctxt;
+    event->read_cb = cb;
   }
   if (mask & EVENT_WRITABLE) {
-    event->write_cb = ctxt;
+    event->write_cb = cb;
   }
   ldout(cct, 10) << __func__ << " create event end fd=" << fd << " mask=" << mask
                  << " original mask is " << event->mask << dendl;
@@ -371,7 +362,7 @@ int EventCenter::process_events(int timeout_microseconds)
   for (int j = 0; j < numevents; j++) {
     int rfired = 0;
     FileEvent *event;
-    EventCallbackRef cb;
+    callback_t cb;
     event = _get_file_event(fired_events[j].fd);
 
     // FIXME: Actually we need to pick up some ways to reduce potential
@@ -381,17 +372,15 @@ int EventCenter::process_events(int timeout_microseconds)
     * processed, so we check if the event is still valid. */
     if (event->mask & fired_events[j].mask & EVENT_READABLE) {
       rfired = 1;
-      cb = event->read_cb;
       file_lock.Unlock();
-      cb->do_request(fired_events[j].fd);
+      event->read_cb(fired_events[j].fd);
       file_lock.Lock();
     }
 
     if (event->mask & fired_events[j].mask & EVENT_WRITABLE) {
       if (!rfired || event->read_cb != event->write_cb) {
-        cb = event->write_cb;
         file_lock.Unlock();
-        cb->do_request(fired_events[j].fd);
+        event->write_cb(fired_events[j].fd);
         file_lock.Lock();
       }
     }
@@ -407,11 +396,11 @@ int EventCenter::process_events(int timeout_microseconds)
   if (external_events.empty()) {
     external_lock.Unlock();
   } else {
-    deque<EventCallbackRef> cur_process;
+    deque<callback_t> cur_process;
     cur_process.swap(external_events);
     external_lock.Unlock();
     while (!cur_process.empty()) {
-      EventCallbackRef e = cur_process.front();
+      callback_t e = cur_process.front();
       if (e)
         e->do_request(0);
       cur_process.pop_front();
@@ -420,7 +409,7 @@ int EventCenter::process_events(int timeout_microseconds)
   return numevents;
 }
 
-void EventCenter::dispatch_event_external(EventCallbackRef e)
+void EventCenter::dispatch_event_external(callback_t e)
 {
   external_lock.Lock();
   external_events.push_back(e);

@@ -51,15 +51,6 @@
 
 class EventCenter;
 
-class EventCallback {
-
- public:
-  virtual void do_request(int fd_or_id) = 0;
-  virtual ~EventCallback() {}       // we want a virtual destructor!!!
-};
-
-typedef ceph::shared_ptr<EventCallback> EventCallbackRef;
-
 struct FiredFileEvent {
   int fd;
   int mask;
@@ -89,8 +80,8 @@ class EventCenter {
 
   struct FileEvent {
     int mask;
-    EventCallbackRef read_cb;
-    EventCallbackRef write_cb;
+    callback_t read_cb;
+    callback_t write_cb;
     FileEvent(): mask(0) {}
   };
 
@@ -105,7 +96,7 @@ class EventCenter {
   int nevent;
   // Used only to external event
   Mutex external_lock, file_lock, time_lock;
-  deque<EventCallbackRef> external_events;
+  deque<callback_t> external_events;
   FileEvent *file_events;
   EventDriver *driver;
   map<utime_t, list<TimeEvent> > time_events;
@@ -147,7 +138,7 @@ class EventCenter {
   pthread_t get_owner() { return owner; }
 
   // Used by internal thread
-  int create_file_event(int fd, int mask, EventCallbackRef ctxt);
+  int create_file_event(int fd, int mask, callback_t cb);
   uint64_t create_time_event(uint64_t milliseconds, callback_t &&callback);
   void delete_file_event(int fd, int mask);
   void delete_time_event(uint64_t id);
@@ -155,7 +146,7 @@ class EventCenter {
   void wakeup();
 
   // Used by external thread
-  void dispatch_event_external(EventCallbackRef e);
+  void dispatch_event_external(callback_t e);
 };
 
 #endif

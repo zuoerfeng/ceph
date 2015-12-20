@@ -247,12 +247,12 @@ class AsyncConnection : public Connection {
 
   Mutex lock;
   utime_t backoff;         // backoff time
-  EventCallbackRef read_handler;
-  EventCallbackRef write_handler;
-  EventCallbackRef reset_handler;
-  EventCallbackRef remote_reset_handler;
-  EventCallbackRef connect_handler;
-  EventCallbackRef local_deliver_handler;
+  callback_t read_handler;
+  callback_t write_handler;
+  callback_t reset_handler;
+  callback_t remote_reset_handler;
+  callback_t connect_handler;
+  callback_t local_deliver_handler;
   callback_t wakeup_handler;
   struct iovec msgvec[IOV_MAX];
   char *recv_buf;
@@ -313,14 +313,6 @@ class AsyncConnection : public Connection {
       center->dispatch_event_external(reset_handler);
     lock.Unlock();
     mark_down();
-  }
-  void cleanup_handler() {
-    read_handler.reset();
-    write_handler.reset();
-    reset_handler.reset();
-    remote_reset_handler.reset();
-    connect_handler.reset();
-    local_deliver_handler.reset();
   }
   PerfCounters *get_perf_counter() {
     return logger;

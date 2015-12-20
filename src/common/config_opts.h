@@ -135,6 +135,7 @@ SUBSYS(refs, 0, 0)
 SUBSYS(xio, 1, 5)
 SUBSYS(compressor, 1, 5)
 SUBSYS(newstore, 1, 5)
+SUBSYS(dpdk, 1, 5)
 
 OPTION(key, OPT_STR, "")
 OPTION(keyfile, OPT_STR, "")
@@ -182,6 +183,31 @@ OPTION(ms_async_set_affinity, OPT_BOOL, true)
 // If ms_async_affinity_cores is empty, all threads will be bind to current running
 // core
 OPTION(ms_async_affinity_cores, OPT_STR, "")
+
+// path to accessible hugetlbfs mount (typically /dev/hugepages/something)")
+OPTION(ms_dpdk_hugepages, OPT_STR, "")
+OPTION(ms_dpdk_host_ipv4_addr, OPT_STR, "")
+OPTION(ms_dpdk_gateway_ipv4_addr, OPT_STR, "")
+OPTION(ms_dpdk_netmask_ipv4_addr, OPT_STR, "")
+OPTION(ms_dpdk_lro, OPT_BOOL, true)
+OPTION(ms_dpdk_hw_flow_control, OPT_BOOL, true)
+OPTION(ms_dpdk_num_cores, OPT_INT, 2)
+OPTION(ms_dpdk_num_queues, OPT_INT, 2)
+// Weighing of a hardware network queue relative to a software queue (0=no work, 1=equal share)")
+OPTION(ms_dpdk_hw_queue_weight, OPT_FLOAT, 1)
+
+
+OPTION(inject_early_sigterm, OPT_BOOL, false)
+OPTION(ms_dpdk_dhcp, OPT_BOOL, true)
+OPTION(ms_dpdk_host_ipv4_addr, OPT_STR, "")
+OPTION(ms_dpdk_gateway_ipv4_addr, OPT_STR, "")
+OPTION(ms_dpdk_netmask_ipv4_addr, OPT_STR, "")
+OPTION(ms_dpdk_num_queues, OPT_INT, 2)
+OPTION(ms_dpdk_lro, OPT_BOOL, true)
+OPTION(ms_dpdk_hw_flow_control, OPT_BOOL, true)
+// Weighing of a hardware network queue relative to a software queue (0=no work, 1=equal share)")
+OPTION(ms_dpdk_hw_queue_weight, OPT_FLOAT, 1)
+
 
 OPTION(inject_early_sigterm, OPT_BOOL, false)
 

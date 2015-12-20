@@ -50,17 +50,6 @@ static ostream& _prefix(std::ostream *_dout, WorkerPool *p) {
 }
 
 
-class C_processor_accept : public EventCallback {
-  Processor *pro;
-
- public:
-  C_processor_accept(Processor *p): pro(p) {}
-  void do_request(int id) {
-    pro->accept();
-  }
-};
-
-
 /*******************
  * Processor
  */
@@ -232,8 +221,7 @@ int Processor::start(Worker *w)
   // start thread
   if (listen_sd >= 0) {
     worker = w;
-    w->center.create_file_event(listen_sd, EVENT_READABLE,
-                                EventCallbackRef(new C_processor_accept(this)));
+    w->center.create_file_event(listen_sd, EVENT_READABLE, [this](){ this->accept(); }
   }
 
   return 0;
@@ -368,7 +356,12 @@ void WorkerPool::barrier()
   for (vector<Worker*>::iterator it = workers.begin(); it != workers.end(); ++it) {
     assert(cur != (*it)->center.get_owner());
     barrier_count.inc();
-    (*it)->center.dispatch_event_external(EventCallbackRef(new C_barrier(this)));
+    (*it)->center.dispatch_event_external(
+        [this]() {
+          Mutex::Locker l(barrier_lock);
+          barrier_count.dec();
+          barrier_cond.Signal();
+        })
   }
   ldout(cct, 10) << __func__ << " wait for " << barrier_count.read() << " barrier" << dendl;
   Mutex::Locker l(barrier_lock);

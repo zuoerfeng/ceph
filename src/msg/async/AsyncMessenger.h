@@ -127,16 +127,6 @@ class WorkerPool {
   Cond barrier_cond;
   atomic_t barrier_count;
 
-  class C_barrier : public EventCallback {
-    WorkerPool *pool;
-   public:
-    C_barrier(WorkerPool *p): pool(p) {}
-    void do_request(int id) {
-      Mutex::Locker l(pool->barrier_lock);
-      pool->barrier_count.dec();
-      pool->barrier_cond.Signal();
-    }
-  };
   friend class C_barrier;
  public:
   WorkerPool(CephContext *c);

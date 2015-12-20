@@ -210,7 +210,7 @@ void EventCenter::delete_file_event(int fd, int mask)
                  << " original mask is " << event->mask << dendl;
 }
 
-uint64_t EventCenter::create_time_event(uint64_t microseconds, EventCallbackRef ctxt)
+uint64_t EventCenter::create_time_event(uint64_t microseconds, callback_t &&cb)
 {
   Mutex::Locker l(time_lock);
   uint64_t id = time_event_next_id++;
@@ -232,7 +232,7 @@ uint64_t EventCenter::create_time_event(uint64_t microseconds, EventCallbackRef 
   expire.set_from_timeval(&tv);
 
   event.id = id;
-  event.time_cb = ctxt;
+  event.time_cb = cb;
   time_events[expire].push_back(event);
   if (expire < next_time)
     wakeup();
@@ -320,7 +320,7 @@ int EventCenter::process_time_events()
   for (list<TimeEvent>::iterator it = need_process.begin();
        it != need_process.end(); ++it) {
     ldout(cct, 10) << __func__ << " process time event: id=" << it->id << dendl;
-    it->time_cb->do_request(it->id);
+    it->time_cb(it->id);
     processed++;
   }
 

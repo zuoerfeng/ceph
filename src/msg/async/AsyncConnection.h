@@ -253,7 +253,7 @@ class AsyncConnection : public Connection {
   EventCallbackRef remote_reset_handler;
   EventCallbackRef connect_handler;
   EventCallbackRef local_deliver_handler;
-  EventCallbackRef wakeup_handler;
+  callback_t wakeup_handler;
   struct iovec msgvec[IOV_MAX];
   char *recv_buf;
   uint32_t recv_max_prefetch;
@@ -306,7 +306,6 @@ class AsyncConnection : public Connection {
   // used by eventcallback
   void handle_write();
   void process();
-  void wakeup_from(uint64_t id);
   void local_deliver();
   void stop() {
     lock.Lock();
@@ -322,7 +321,6 @@ class AsyncConnection : public Connection {
     remote_reset_handler.reset();
     connect_handler.reset();
     local_deliver_handler.reset();
-    wakeup_handler.reset();
   }
   PerfCounters *get_perf_counter() {
     return logger;

@@ -46,16 +46,6 @@ ostream& AsyncConnection::_conn_prefix(std::ostream *_dout) {
 
 const int AsyncConnection::TCP_PREFETCH_MIN_SIZE = 512;
 
-class C_time_wakeup : public EventCallback {
-  AsyncConnectionRef conn;
-
- public:
-  C_time_wakeup(AsyncConnectionRef c): conn(c) {}
-  void do_request(int fd_or_id) {
-    conn->wakeup_from(fd_or_id);
-  }
-};
-
 class C_handle_read : public EventCallback {
   AsyncConnectionRef conn;
 
@@ -189,7 +179,13 @@ AsyncConnection::AsyncConnection(CephContext *cct, AsyncMessenger *m, EventCente
   remote_reset_handler.reset(new C_handle_remote_reset(async_msgr, this));
   connect_handler.reset(new C_deliver_connect(async_msgr, this));
   local_deliver_handler.reset(new C_local_deliver(this));
-  wakeup_handler.reset(new C_time_wakeup(this));
+
+  wakeup_handler = [this]() {
+    lock.Lock();
+    register_time_events.erase(id);
+    lock.Unlock();
+    process();
+  };
   memset(msgvec, 0, sizeof(msgvec));
   // double recv_max_prefetch see "read_until"
   recv_buf = new char[2*recv_max_prefetch];
@@ -683,7 +679,10 @@ void AsyncConnection::process()
               // following thread pool deal with th full message queue isn't a
               // short time, so we can wait a ms.
               if (register_time_events.empty())
-                register_time_events.insert(center->create_time_event(1000, wakeup_handler));
+                register_time_events.insert(
+                    center->create_time_event(
+                        1000,
+                        wakeup_handler));
               break;
             }
           }
@@ -2532,14 +2531,6 @@ void AsyncConnection::handle_write()
   lock.Lock();
   fault();
   lock.Unlock();
-}
-
-void AsyncConnection::wakeup_from(uint64_t id)
-{
-  lock.Lock();
-  register_time_events.erase(id);
-  lock.Unlock();
-  process();
 }
 
 void AsyncConnection::local_deliver()

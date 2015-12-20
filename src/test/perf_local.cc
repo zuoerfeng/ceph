@@ -482,16 +482,6 @@ class CenterWorker : public Thread {
   }
 };
 
-class CountEvent: public EventCallback {
-  atomic_t *count;
-
- public:
-  CountEvent(atomic_t *atomic): count(atomic) {}
-  void do_request(int id) {
-    count->dec();
-  }
-};
-
 double eventcenter_dispatch()
 {
   int count = 100000;
@@ -499,7 +489,7 @@ double eventcenter_dispatch()
   CenterWorker worker(g_ceph_context);
   atomic_t flag(1);
   worker.create();
-  EventCallbackRef count_event(new CountEvent(&flag));
+  auto cb = [&flag]() { flag.dec(); }
 
   worker.center.dispatch_event_external(count_event);
   // Start a new thread and wait for it to ready.

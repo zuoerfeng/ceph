@@ -244,20 +244,13 @@ TEST_P(EventDriverTest, NetworkSocketTest) {
   ::close(listen_sd);
 }
 
-class FakeEvent : public EventCallback {
-
- public:
-  void do_request(int fd_or_id) {}
-};
-
 TEST(EventCenterTest, FileEventExpansion) {
   vector<int> sds;
   EventCenter center(g_ceph_context);
   center.init(100);
-  EventCallbackRef e(new FakeEvent());
   for (int i = 0; i < 300; i++) {
     int sd = ::socket(AF_INET, SOCK_STREAM, 0);
-    center.create_file_event(sd, EVENT_READABLE, e);
+    center.create_file_event(sd, EVENT_READABLE, []() {});
     sds.push_back(sd);
   }
 
@@ -287,21 +280,6 @@ class Worker : public Thread {
   }
 };
 
-class CountEvent: public EventCallback {
-  atomic_t *count;
-  Mutex *lock;
-  Cond *cond;
-
- public:
-  CountEvent(atomic_t *atomic, Mutex *l, Cond *c): count(atomic), lock(l), cond(c) {}
-  void do_request(int id) {
-    lock->Lock();
-    count->dec();
-    cond->Signal();
-    lock->Unlock();
-  }
-};
-
 TEST(EventCenterTest, DispatchTest) {
   Worker worker1(g_ceph_context), worker2(g_ceph_context);
   atomic_t count(0);
@@ -309,11 +287,18 @@ TEST(EventCenterTest, DispatchTest) {
   Cond cond;
   worker1.create();
   worker2.create();
+  auto cb = [&lock, &count, &cond]() {
+    lock.Lock();
+    count.dec();
+    cond.Signal();
+    lock.Unlock();
+  }
+
   for (int i = 0; i < 10000; ++i) {
     count.inc();
-    worker1.center.dispatch_event_external(EventCallbackRef(new CountEvent(&count, &lock, &cond)));
+    worker1.center.dispatch_event_external(cb)
     count.inc();
-    worker2.center.dispatch_event_external(EventCallbackRef(new CountEvent(&count, &lock, &cond)));
+    worker2.center.dispatch_event_external(cb);
     Mutex::Locker l(lock);
     while (count.read())
       cond.Wait(lock);

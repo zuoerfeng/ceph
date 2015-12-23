@@ -144,6 +144,8 @@ class EventCenter {
   void set_owner(pthread_t p) { owner = p; }
   pthread_t get_owner() { return owner; }
 
+  EventDriver *get_driver() { return driver; }
+
   // Used by internal thread
   int create_file_event(int fd, int mask, EventCallbackRef ctxt);
   uint64_t create_time_event(uint64_t milliseconds, EventCallbackRef ctxt);

@@ -76,7 +76,7 @@ struct FiredFileEvent {
 class EventDriver {
  public:
   virtual ~EventDriver() {}       // we want a virtual destructor!!!
-  virtual int init(int nevent) = 0;
+  virtual int init(EventCenter *center, int nevent) = 0;
   virtual int add_event(int fd, int cur_mask, int mask) = 0;
   virtual int del_event(int fd, int cur_mask, int del_mask) = 0;
   virtual int event_wait(vector<FiredFileEvent> &fired_events, struct timeval *tp) = 0;
@@ -104,6 +104,42 @@ class EventCenter {
     TimeEvent(): id(0), time_cb(NULL) {}
   };
 
+  /**
+     * A Poller object is invoked once each time through the dispatcher's
+     * inner polling loop.
+     */
+  class Poller {
+   public:
+    explicit Poller(EventCenter* center, const string& pollerName);
+    virtual ~Poller();
+
+    /**
+     * This method is defined by a subclass and invoked once by the
+     * center during each pass through its inner polling loop.
+     *
+     * \return
+     *      1 means that this poller did useful work during this call.
+     *      0 means that the poller found no work to do.
+     */
+    virtual int poll() = 0;
+
+   private:
+    /// The EventCenter object that owns this Poller.  NULL means the
+    /// EventCenter has been deleted.
+    EventCenter* owner;
+
+    /// Human-readable string name given to the poller to make it
+    /// easy to identify for debugging. For most pollers just passing
+    /// in the subclass name probably makes sense.
+    string poller_name;
+
+    /// Index of this Poller in EventCenter::pollers.  Allows deletion
+    /// without having to scan all the entries in pollers. -1 means
+    /// this poller isn't currently in EventCenter::pollers (happens
+    /// after EventCenter::reset).
+    int slot;
+  };
+
   CephContext *cct;
   int nevent;
   // Used only to external event
@@ -113,6 +149,10 @@ class EventCenter {
   vector<FileEvent> file_events;
   EventDriver *driver;
   map<utime_t, list<TimeEvent> > time_events;
+  // Keeps track of all of the pollers currently defined.  We don't
+  // use an intrusive list here because it isn't reentrant: we need
+  // to add/remove elements while the center is traversing the list.
+  std::vector<Poller*> pollers;
   uint64_t time_event_next_id;
   time_t last_time; // last time process time event
   utime_t next_time; // next wake up time

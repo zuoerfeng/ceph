@@ -19,6 +19,10 @@
 #include "common/errno.h"
 #include "Event.h"
 
+#ifdef HAVE_DPDK
+#include "dpdk/EventDPDK.h"
+#endif
+
 #ifdef HAVE_EPOLL
 #include "EventEpoll.h"
 #else
@@ -56,6 +60,46 @@ class C_handle_notify : public EventCallback {
 #undef dout_prefix
 #define dout_prefix _event_prefix(_dout)
 
+/**
+ * Construct a Poller.
+ *
+ * \param center
+ *      EventCenter object through which the poller will be invoked (defaults
+ *      to the global #RAMCloud::center object).
+ * \param pollerName
+ *      Human readable name that can be printed out in debugging messages
+ *      about the poller. The name of the superclass is probably sufficient
+ *      for most cases.
+ */
+EventCenter::Poller::Poller(EventCenter* center, const string& name)
+    : owner(center), poller_ame(name), slot(owner->pollers.size())
+{
+  owner->pollers.push_back(this);
+}
+
+/**
+ * Destroy a Poller.
+ */
+EventCenter::Poller::~Poller()
+{
+  if (slot < 0) {
+    return;
+  }
+
+  // Erase this Poller from the vector by overwriting it with the
+  // poller that used to be the last one in the vector.
+  //
+  // Note: this approach is reentrant (it is safe to delete a
+  // poller from a poller callback, which means that the poll
+  // method is in the middle of scanning the list of all pollers;
+  // the worst that will happen is that the poller that got moved
+  // may not be invoked in the current scan).
+  owner->pollers[slot] = owner->pollers.back();
+  owner->pollers[slot]->slot = slot;
+  owner->pollers.pop_back();
+  slot = -1;
+}
+
 ostream& EventCenter::_event_prefix(std::ostream *_dout)
 {
   return *_dout << "Event(" << this << " owner=" << get_owner() << " nevent=" << nevent
@@ -66,6 +110,13 @@ int EventCenter::init(int n)
 {
   // can't init multi times
   assert(nevent == 0);
+
+  driver = nullptr;
+  if (cct->_conf->ms_dpdk_enable) {
+#ifdef HAVE_DPDK
+    driver = new DPDKDriver(cct);
+#endif
+  } else {
 #ifdef HAVE_EPOLL
   driver = new EpollDriver(cct);
 #else
@@ -75,6 +126,7 @@ int EventCenter::init(int n)
   driver = new SelectDriver(cct);
 #endif
 #endif
+  }
 
   if (!driver) {
     lderr(cct) << __func__ << " failed to create event driver " << dendl;
@@ -248,7 +300,6 @@ void EventCenter::delete_time_event(uint64_t id)
   if (id >= time_event_next_id)
     return ;
 
-
   for (map<utime_t, list<TimeEvent> >::iterator it = time_events.begin();
        it != time_events.end(); ++it) {
     for (list<TimeEvent>::iterator j = it->second.begin();
@@ -265,6 +316,10 @@ void EventCenter::delete_time_event(uint64_t id)
 
 void EventCenter::wakeup()
 {
+  // No need to wake up since we never sleep
+  if (!pollers.empty())
+    return ;
+
   if (already_wakeup.compare_and_swap(0, 1)) {
     ldout(cct, 1) << __func__ << dendl;
     char buf[1];
@@ -332,18 +387,19 @@ int EventCenter::process_events(int timeout_microseconds)
   // Must set owner before looping
   assert(owner);
   struct timeval tv;
+  struct timeval *tvp = pollers.empty() ? &tv : nullptr;
   int numevents;
   bool trigger_time = false;
 
-  utime_t period, shortest, now = ceph_clock_now(cct);
-  now.copy_to_timeval(&tv);
-  if (timeout_microseconds > 0) {
-    tv.tv_sec += timeout_microseconds / 1000000;
-    tv.tv_usec += timeout_microseconds % 1000000;
-  }
-  shortest.set_from_timeval(&tv);
+  if (pollers.empty()) {
+    utime_t period, shortest, now = ceph_clock_now(cct);
+    now.copy_to_timeval(&tv);
+    if (timeout_microseconds > 0) {
+      tv.tv_sec += timeout_microseconds / 1000000;
+      tv.tv_usec += timeout_microseconds % 1000000;
+    }
+    shortest.set_from_timeval(&tv);
 
-  {
     Mutex::Locker l(time_lock);
     map<utime_t, list<TimeEvent> >::iterator it = time_events.begin();
     if (it != time_events.end() && shortest >= it->first) {
@@ -361,12 +417,16 @@ int EventCenter::process_events(int timeout_microseconds)
       tv.tv_sec = timeout_microseconds / 1000000;
       tv.tv_usec = timeout_microseconds % 1000000;
     }
+    ldout(cct, 10) << __func__ << " wait second " << tv.tv_sec << " usec " << tv.tv_usec << dendl;
+  } else {
+    map<utime_t, list<TimeEvent> >::iterator it = time_events.begin();
+    if (it != time_events.end() && shortest >= it->first)
+      trigger_time = true;
   }
 
-  ldout(cct, 10) << __func__ << " wait second " << tv.tv_sec << " usec " << tv.tv_usec << dendl;
   vector<FiredFileEvent> fired_events;
   next_time = shortest;
-  numevents = driver->event_wait(fired_events, &tv);
+  numevents = driver->event_wait(fired_events, tvp);
   file_lock.Lock();
   for (int j = 0; j < numevents; j++) {
     int rfired = 0;
@@ -417,6 +477,15 @@ int EventCenter::process_events(int timeout_microseconds)
       cur_process.pop_front();
     }
   }
+
+  if (!numevents && !tvp) {
+    for (uint32_t i = 0; i < pollers.size(); i++)
+      numevents += pollers[i]->poll();
+  }
+
+  if (numevents == 0)
+    _mm_pause();
+
   return numevents;
 }
 

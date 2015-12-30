@@ -237,6 +237,16 @@ int64_t Throttle::put(int64_t c)
   return count.read();
 }
 
+void Throttle::reset() {
+  Mutex::Locker l(lock);
+  if (!cond.empty())
+    cond.front()->SignalOne();
+  count.set(0);
+  if (logger) {
+    logger->set(l_throttle_val, 0);
+  }
+}
+
 SimpleThrottle::SimpleThrottle(uint64_t max, bool ignore_enoent)
   : m_lock("SimpleThrottle"),
     m_max(max),

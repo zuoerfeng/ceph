@@ -706,12 +706,12 @@ fi
 # Check for DPDK
 AC_ARG_WITH(dpdk,
             AC_HELP_STRING([--with-dpdk], [include DPDK support]),
-            [], [enable_dpdk=no])
+            [], [with_dpdk=no])
 
-if test "x$enable_dpdk" = x"yes"; then
+if test "x$with_dpdk" = x"yes"; then
    LDFLAGS="$LDFLAGS -L$RTE_SDK/$RTE_TARGET/lib/"
-   AC_CHECK_LIB([rte_eal], [rte_eal_init], [], AC_MSG_ERROR([Cannot find DPDK library],
-                [-lpthread -lrte_malloc -lethdev -lrte_mempool -lrte_ring])
+   AC_CHECK_LIB([rte_eal], [rte_eal_init], [],
+                AC_MSG_ERROR([Cannot find DPDK library]))
 
    AC_DEFINE(HAVE_DPDK,1,[conditional for building with DPDK support])
    DPDK_LIBS="-lrte_eal -lrte_pmd_e1000 -lrte_pmd_ixgbe"

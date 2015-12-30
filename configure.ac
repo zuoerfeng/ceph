@@ -702,6 +702,24 @@ if test "x$enable_xio" = x"yes"; then
    AC_SUBST(XIO_LIBS)
 fi
 
+
+# Check for DPDK
+AC_ARG_WITH(dpdk,
+            AC_HELP_STRING([--with-dpdk], [include DPDK support]),
+            [], [enable_dpdk=no])
+
+if test "x$enable_dpdk" = x"yes"; then
+   LDFLAGS="$LDFLAGS -L$RTE_SDK/$RTE_TARGET/lib/"
+   AC_CHECK_LIB([rte_eal], [rte_eal_init], [], AC_MSG_ERROR([Cannot find DPDK library],
+                [-lpthread -lrte_malloc -lethdev -lrte_mempool -lrte_ring])
+
+   AC_DEFINE(HAVE_DPDK,1,[conditional for building with DPDK support])
+   DPDK_LIBS="-lrte_eal -lrte_pmd_e1000 -lrte_pmd_ixgbe"
+   DPDK_LIBS+="-lethdev -lrte_mempool -lrte_ring -lrte_malloc"
+   DPDK_LIBS+="-lrte_mbuf"
+   AC_SUBST(DPDK_LIBS)
+fi
+
 #
 # FreeBSD has it in base.
 #

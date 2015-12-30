@@ -121,6 +121,11 @@ if(HAVE_XIO)
   list(APPEND EXTRALIBS ${Xio_LIBRARY} ibverbs rdmacm pthread rt)
 endif(HAVE_XIO)
 
+if(HAVE_DPDK)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${DPDK_INCLUDE_DIR}")
+  list(APPEND EXTRALIBS ${DPDK_LIBRARY} pthread)
+endif(HAVE_DPDK)
+
 if(${WITH_TCMALLOC} AND ${HAVE_GPERFTOOLS})
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free")
   set(TCMALLOC_LIBS tcmalloc)
@@ -190,6 +195,19 @@ if(HAVE_XIO)
     msg/xio/XioPortal.cc
     msg/xio/QueueStrategy.cc)
 endif(HAVE_XIO)
+
+set(dpdk_common_srcs)
+if(HAVE_DPDK)
+  list(APPEND xio_common_srcs
+    msg/async/dpdk/ARP.cc
+	msg/async/dpdk/DPDK.cc
+	msg/async/dpdk/dpdk_rte.cc
+	msg/async/dpdk/DPDKStack.cc
+	msg/async/dpdk/EventDPDK.cc
+	msg/async/dpdk/IP.cc
+	msg/async/dpdk/Packet.cc
+	msg/async/dpdk/TCP.cc)
+endif(HAVE_DPDK)
 
 if(HAVE_GOOD_YASM_ELF64)
   set(yasm_srcs
@@ -263,6 +281,7 @@ set(libcommon_files
   msg/async/EventSelect.cc
   msg/async/net_handler.cc
   ${xio_common_srcs}
+  ${dpdk_common_srcs}
   msg/msg_types.cc
   common/hobject.cc
   osd/OSDMap.cc

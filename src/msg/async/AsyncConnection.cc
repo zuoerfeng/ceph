@@ -1065,8 +1065,6 @@ int AsyncConnection::_process_connection()
           break;
         }
 
-        net.set_socket_options(sd);
-
         state = STATE_CONNECTING_WAIT_BANNER;
         break;
       }
@@ -1376,7 +1374,7 @@ int AsyncConnection::_process_connection()
         if (net.set_nonblock(sd) < 0)
           goto fail;
 
-        net.set_socket_options(sd);
+        net.set_socket_options(sd, async_msgr->cct->_conf->ms_tcp_nodelay, async_msgr->cct->_conf->ms_tcp_rcvbuf);
 
         bl.append(CEPH_BANNER, strlen(CEPH_BANNER));
 

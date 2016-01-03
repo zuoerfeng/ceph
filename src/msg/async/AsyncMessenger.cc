@@ -98,7 +98,7 @@ int Processor::bind(const entity_addr_t &bind_addr, const set<int>& avoid_ports)
     return -errno;
   }
 
-  net.set_socket_options(listen_sd);
+  net.set_socket_options(listen_sd, msgr->cct->_conf->ms_tcp_nodelay, msgr->cct->_conf->ms_tcp_rcvbuf);
 
   // use whatever user specified (if anything)
   entity_addr_t listen_addr = bind_addr;

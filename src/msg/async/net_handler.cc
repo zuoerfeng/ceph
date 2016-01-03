@@ -116,7 +116,8 @@ int NetHandler::generic_connect(const entity_addr_t& addr, bool nonblock)
     }
   }
 
-  set_socket_options(s);
+  set_socket_options(s, cct->_conf->ms_tcp_nodelay, cct->_conf->ms_tcp_rcvbuf);
+
 
   ret = ::connect(s, (sockaddr*)&addr.addr, addr.addr_size());
   if (ret < 0) {

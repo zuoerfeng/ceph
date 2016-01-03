@@ -72,7 +72,7 @@ class C_handle_notify : public EventCallback {
  *      for most cases.
  */
 EventCenter::Poller::Poller(EventCenter* center, const string& name)
-    : owner(center), poller_ame(name), slot(owner->pollers.size())
+    : owner(center), poller_name(name), slot(owner->pollers.size())
 {
   owner->pollers.push_back(this);
 }
@@ -133,7 +133,7 @@ int EventCenter::init(int n)
     return -1;
   }
 
-  int r = driver->init(n);
+  int r = driver->init(this, n);
   if (r < 0) {
     lderr(cct) << __func__ << " failed to init event driver." << dendl;
     return r;
@@ -391,8 +391,9 @@ int EventCenter::process_events(int timeout_microseconds)
   int numevents;
   bool trigger_time = false;
 
+  utime_t now = ceph_clock_now(cct);
   if (pollers.empty()) {
-    utime_t period, shortest, now = ceph_clock_now(cct);
+    utime_t period, shortest;
     now.copy_to_timeval(&tv);
     if (timeout_microseconds > 0) {
       tv.tv_sec += timeout_microseconds / 1000000;
@@ -418,14 +419,15 @@ int EventCenter::process_events(int timeout_microseconds)
       tv.tv_usec = timeout_microseconds % 1000000;
     }
     ldout(cct, 10) << __func__ << " wait second " << tv.tv_sec << " usec " << tv.tv_usec << dendl;
+    next_time = shortest;
   } else {
     map<utime_t, list<TimeEvent> >::iterator it = time_events.begin();
-    if (it != time_events.end() && shortest >= it->first)
+    if (it != time_events.end() && now >= it->first)
       trigger_time = true;
+    next_time = now;
   }
 
   vector<FiredFileEvent> fired_events;
-  next_time = shortest;
   numevents = driver->event_wait(fired_events, tvp);
   file_lock.Lock();
   for (int j = 0; j < numevents; j++) {

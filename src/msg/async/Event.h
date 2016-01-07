@@ -108,6 +108,7 @@ class EventCenter {
      * A Poller object is invoked once each time through the dispatcher's
      * inner polling loop.
      */
+ public:
   class Poller {
    public:
     explicit Poller(EventCenter* center, const string& pollerName);

@@ -1750,6 +1750,21 @@ set_target_properties(test_async_driver PROPERTIES COMPILE_FLAGS
   ${UNITTEST_CXX_FLAGS})
 target_link_libraries(test_async_driver os global ${BLKID_LIBRARIES} ${CMAKE_DL_LIBS} ${UNITTEST_LIBS})
 
+# test_async_driver
+add_executable(test_async_transport
+  msgr/test_async_transport.cc
+  $<TARGET_OBJECTS:heap_profiler_objs>
+  )
+set_target_properties(test_async_transport PROPERTIES COMPILE_FLAGS
+  ${UNITTEST_CXX_FLAGS})
+target_link_libraries(test_async_transport
+    os
+    global
+    ${DPDK_LIBRARIES}
+    ${CMAKE_DL_LIBS}
+    ${ALLOC_LIBS}
+    ${UNITTEST_LIBS})
+
 # test_msgr
 add_executable(test_msgr
   msgr/test_msgr.cc

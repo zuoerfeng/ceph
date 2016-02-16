@@ -97,6 +97,9 @@ class CephContext;
 	const vector<pair<uint64_t,uint64_t> >& buffer_extents);
 
       void assemble_result(CephContext *cct, bufferlist& bl, bool zero_tail);
+      void reset() {
+        partial.clear();
+      }
     };
 
   };

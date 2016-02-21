@@ -396,7 +396,7 @@ int EventCenter::process_events(int timeout_microseconds)
   bool trigger_time = false;
   utime_t now = ceph_clock_now(cct);;
 
-  bool blocking = pollers.empty() && !external_num_events.load() ? &tv : nullptr;
+  bool blocking = pollers.empty() && !external_num_events.load();
   // If exists external events or exists poller, don't block
   if (blocking) {
     utime_t period, shortest;
@@ -433,6 +433,8 @@ int EventCenter::process_events(int timeout_microseconds)
     tv.tv_sec = 0;
     tv.tv_usec = 0;
     next_time = now;
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
   }
 
   vector<FiredFileEvent> fired_events;

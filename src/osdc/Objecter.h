@@ -1743,16 +1743,22 @@ public:
 
   // -- osd sessions --
   struct OSDSession : public RefCountedObject {
-    boost::shared_mutex lock;
-    using lock_guard = std::lock_guard<decltype(lock)>;
-    using unique_lock = std::unique_lock<decltype(lock)>;
-    using shared_lock = boost::shared_lock<decltype(lock)>;
-    using shunique_lcok = ceph::shunique_lock<decltype(lock)>;
+    struct ShardSessionData {
+      // pending ops
+      std::mutex lock;
+      map<ceph_tid_t,Op*> ops;
+    };
 
     // pending ops
-    map<ceph_tid_t,Op*> ops;
     map<uint64_t, LingerOp*> linger_ops;
     map<ceph_tid_t,CommandOp*> command_ops;
+
+    vector<ShardSessionData*> datas;
+    boost::shared_mutex session_lock;
+    using lock_guard = std::lock_guard<decltype(session_lock)>;
+    using unique_lock = std::unique_lock<decltype(session_lock)>;
+    using shared_lock = boost::shared_lock<decltype(session_lock)>;
+    using shunique_lcok = ceph::shunique_lock<decltype(session_lock)>;
 
     int osd;
     int incarnation;
@@ -1766,12 +1772,23 @@ public:
     OSDSession(CephContext *cct, int o) :
       osd(o), incarnation(0), con(NULL),
       num_locks(cct->_conf->objecter_completion_locks_per_session),
-      completion_locks(new std::mutex[num_locks]) {}
+      completion_locks(new std::mutex[num_locks]) {
+        // homeless session
+        if (osd < 0)
+          num_locks = 1;
+        for (int i = 0; i < num_locks; i++) {
+          OSDSession::ShardSessionData *d = new ShardSessionData();
+          datas.push_back(d);
+        }
+      }
 
     ~OSDSession();
 
     bool is_homeless() { return (osd == -1); }
 
+    ShardSessionData *get_shard_session_data(const ceph_tid_t tid) {
+      return datas[tid % num_locks];
+    }
     unique_completion_lock get_lock(object_t& oid);
   };
   map<int,OSDSession*> osd_sessions;
@@ -1816,8 +1833,8 @@ public:
   MOSDOp *_prepare_osd_op(Op *op);
   void _send_op(Op *op, MOSDOp *m = NULL);
   void _send_op_account(Op *op);
-  void _cancel_linger_op(Op *op);
-  void _finish_op(Op *op, int r);
+  void _cancel_linger_op(Op *op, OSDSession::ShardSessionData *d);
+  void _finish_op(Op *op, OSDSession::ShardSessionData *d, int r);
   static bool is_pg_changed(
     int oldprimary,
     const vector<int>& oldacting,
@@ -1840,8 +1857,8 @@ public:
   int _map_session(op_target_t *op, OSDSession **s,
 		   shunique_lock& lc);
 
-  void _session_op_assign(OSDSession *s, Op *op);
-  void _session_op_remove(OSDSession *s, Op *op);
+  void _session_op_assign(OSDSession *s, OSDSession::ShardSessionData *d, Op *op);
+  void _session_op_remove(OSDSession *s, OSDSession::ShardSessionData *d, Op *op);
   void _session_linger_op_assign(OSDSession *to, LingerOp *op);
   void _session_linger_op_remove(OSDSession *from, LingerOp *op);
   void _session_command_op_assign(OSDSession *to, CommandOp *op);
@@ -2068,7 +2085,7 @@ public:
   /**
    * Output in-flight requests
    */
-  void _dump_active(OSDSession *s);
+  void _dump_active(OSDSession::ShardSessionData *d);
   void _dump_active();
   void dump_active();
   void dump_requests(Formatter *fmt);
@@ -2107,7 +2124,7 @@ public:
 
   /// cancel an in-progress request with the given return code
 private:
-  int op_cancel(OSDSession *s, ceph_tid_t tid, int r);
+  int op_cancel(OSDSession *s, OSDSession::ShardSessionData *d, ceph_tid_t tid, int r);
   int _op_cancel(ceph_tid_t tid, int r);
 public:
   int op_cancel(ceph_tid_t tid, int r);

@@ -2934,7 +2934,7 @@ void Objecter::_cancel_linger_op(Op *op)
 
 void Objecter::_finish_op(Op *op, int r)
 {
-  ldout(cct, 15) << "finish_op " << op->tid << dendl;
+  ldout(cct, 15) << "_finish_op " << op->tid << dendl;
 
   // op->session->lock is locked unique
 
@@ -2953,22 +2953,6 @@ void Objecter::_finish_op(Op *op, int r)
   inflight_ops.dec();
 
   op->put();
-}
-
-void Objecter::finish_op(OSDSession *session, ceph_tid_t tid)
-{
-  ldout(cct, 15) << "finish_op " << tid << dendl;
-  shared_lock rl(rwlock);
-
-  OSDSession::unique_lock wl(session->lock);
-
-  map<ceph_tid_t, Op *>::iterator iter = session->ops.find(tid);
-  if (iter == session->ops.end())
-    return;
-
-  Op *op = iter->second;
-
-  _finish_op(op, 0);
 }
 
 MOSDOp *Objecter::_prepare_osd_op(Op *op)

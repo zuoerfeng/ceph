@@ -1817,7 +1817,6 @@ public:
   void _send_op(Op *op, MOSDOp *m = NULL);
   void _send_op_account(Op *op);
   void _cancel_linger_op(Op *op);
-  void finish_op(OSDSession *session, ceph_tid_t tid);
   void _finish_op(Op *op, int r);
   static bool is_pg_changed(
     int oldprimary,

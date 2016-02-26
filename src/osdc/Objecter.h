@@ -1749,6 +1749,7 @@ public:
       map<ceph_tid_t,Op*> ops;
     };
 
+    Objecter *objecter;
     // pending ops
     map<uint64_t, LingerOp*> linger_ops;
     map<ceph_tid_t,CommandOp*> command_ops;
@@ -1769,8 +1770,8 @@ public:
       decltype(completion_locks)::element_type>;
 
 
-    OSDSession(CephContext *cct, int o) :
-      osd(o), incarnation(0), con(NULL),
+    OSDSession(CephContext *cct, Objecter *obj, int o) :
+      objecter(obj), osd(o), incarnation(0), con(NULL),
       num_locks(cct->_conf->objecter_completion_locks_per_session),
       completion_locks(new std::mutex[num_locks]) {
         // homeless session
@@ -1790,8 +1791,38 @@ public:
       return datas[tid % num_locks];
     }
     unique_completion_lock get_lock(object_t& oid);
+
+    void put_session();
+    void get_session();
+    void _reopen_session();
+
+    void _session_op_assign(Op *op);
+    void _session_op_remove(Op *op);
+    void _session_linger_op_assign(LingerOp *op);
+    void _session_linger_op_remove(LingerOp *op);
+    void _session_command_op_assign(CommandOp *op);
+    void _session_command_op_remove(CommandOp *op);
+
+    void _kick_requests(map<uint64_t, LingerOp *>& lresend);
+    void _scan_requests(bool force_resend,
+                        bool cluster_full,
+                        map<int64_t, bool> *pool_full_map,
+                        map<ceph_tid_t, Op*>& need_resend,
+                        list<LingerOp*>& need_resend_linger,
+                        map<ceph_tid_t, CommandOp*>& need_resend_command,
+                        shunique_lock& sul);
+
+    // dump misc
+    void _dump_active();
+    void _dump_ops(Formatter *fmt);
+    void _dump_linger_ops(Formatter *fmt);
+    void _dump_command_ops(Formatter *fmt);
   };
   map<int,OSDSession*> osd_sessions;
+  OSDSession *homeless_session;
+  int _lookup_or_create_session(int osd, OSDSession **session, shunique_lock& sul);
+  int _map_session(op_target_t *op, OSDSession **s, shunique_lock& lc);
+  void close_session(OSDSession *session);
 
   bool osdmap_full_flag() const;
   bool osdmap_pool_full(const int64_t pool_id) const;
@@ -1817,8 +1848,6 @@ public:
   map<ceph_tid_t,PoolOp*> pool_ops;
   atomic_t num_homeless_ops;
 
-  OSDSession *homeless_session;
-
   // ops waiting for an osdmap with a new pool or confirmation that
   // the pool does not exist (may be expanded to other uses later)
   map<uint64_t, LingerOp*> check_latest_map_lingers;
@@ -1832,9 +1861,9 @@ public:
 
   MOSDOp *_prepare_osd_op(Op *op);
   void _send_op(Op *op, MOSDOp *m = NULL);
+  void _finish_op(Op *op, int r);
   void _send_op_account(Op *op);
-  void _cancel_linger_op(Op *op, OSDSession::ShardSessionData *d);
-  void _finish_op(Op *op, OSDSession::ShardSessionData *d, int r);
+  void _cancel_linger_op(Op *op);
   static bool is_pg_changed(
     int oldprimary,
     const vector<int>& oldacting,
@@ -1854,15 +1883,6 @@ public:
   bool target_should_be_paused(op_target_t *op);
   int _calc_target(op_target_t *t, epoch_t *last_force_resend = 0,
 		   bool any_change = false);
-  int _map_session(op_target_t *op, OSDSession **s,
-		   shunique_lock& lc);
-
-  void _session_op_assign(OSDSession *s, OSDSession::ShardSessionData *d, Op *op);
-  void _session_op_remove(OSDSession *s, OSDSession::ShardSessionData *d, Op *op);
-  void _session_linger_op_assign(OSDSession *to, LingerOp *op);
-  void _session_linger_op_remove(OSDSession *from, LingerOp *op);
-  void _session_command_op_assign(OSDSession *to, CommandOp *op);
-  void _session_command_op_remove(OSDSession *from, CommandOp *op);
 
   int _assign_op_target_session(Op *op, shunique_lock& lc,
 				bool src_session_locked,
@@ -1896,14 +1916,7 @@ private:
   void _command_cancel_map_check(CommandOp *op);
 
   void kick_requests(OSDSession *session);
-  void _kick_requests(OSDSession *session, map<uint64_t, LingerOp *>& lresend);
   void _linger_ops_resend(map<uint64_t, LingerOp *>& lresend, unique_lock& ul);
-
-  int _get_session(int osd, OSDSession **session, shunique_lock& sul);
-  void put_session(OSDSession *s);
-  void get_session(OSDSession *s);
-  void _reopen_session(OSDSession *session);
-  void close_session(OSDSession *session);
 
   void _nlist_reply(NListContext *list_context, int r, Context *final_finish,
 		   epoch_t reply_epoch);
@@ -1958,7 +1971,7 @@ private:
     last_seen_osdmap_version(0), last_seen_pgmap_version(0),
     logger(NULL), tick_event(0), m_request_state_hook(NULL),
     num_homeless_ops(0),
-    homeless_session(new OSDSession(cct, -1)),
+    homeless_session(new OSDSession(cct, this, -1)),
     mon_timeout(ceph::make_timespan(mon_timeout)),
     osd_timeout(ceph::make_timespan(osd_timeout)),
     op_throttle_bytes(cct, "objecter_bytes",
@@ -2023,15 +2036,6 @@ private:
   void set_honor_osdmap_full() { honor_osdmap_full = true; }
   void unset_honor_osdmap_full() { honor_osdmap_full = false; }
 
-  void _scan_requests(OSDSession *s,
-		      bool force_resend,
-		      bool cluster_full,
-		      map<int64_t, bool> *pool_full_map,
-		      map<ceph_tid_t, Op*>& need_resend,
-		      list<LingerOp*>& need_resend_linger,
-		      map<ceph_tid_t, CommandOp*>& need_resend_command,
-		      shunique_lock& sul);
-
   int64_t get_object_hash_position(int64_t pool, const string& key,
 				   const string& ns);
   int64_t get_object_pg_hash_position(int64_t pool, const string& key,
@@ -2085,15 +2089,11 @@ public:
   /**
    * Output in-flight requests
    */
-  void _dump_active(OSDSession::ShardSessionData *d);
   void _dump_active();
   void dump_active();
   void dump_requests(Formatter *fmt);
-  void _dump_ops(const OSDSession *s, Formatter *fmt);
   void dump_ops(Formatter *fmt);
-  void _dump_linger_ops(const OSDSession *s, Formatter *fmt);
   void dump_linger_ops(Formatter *fmt);
-  void _dump_command_ops(const OSDSession *s, Formatter *fmt);
   void dump_command_ops(Formatter *fmt);
   void dump_pool_ops(Formatter *fmt) const;
   void dump_pool_stat_ops(Formatter *fmt) const;

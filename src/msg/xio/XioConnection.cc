@@ -20,6 +20,8 @@
 #include "msg/msg_types.h"
 #include "auth/none/AuthNoneProtocol.h" // XXX
 
+#include "common/deleter.h"
+
 #include "include/assert.h"
 #include "common/dout.h"
 
@@ -283,9 +285,11 @@ int XioConnection::on_msg_req(struct xio_session *session,
        * data) boundary */
 
       take_len = MIN(blen, msg_iov->iov_len);
+      m_hook->get();
       payload.append(
-	buffer::create_msg(
-	  take_len, (char*) msg_iov->iov_base, m_hook));
+          buffer::claim_buffer(
+              take_len, (char*)msg_iov->iov_base,
+              make_deleter([m_hook]() { m_hook->put(); }));
       blen -= take_len;
       if (! blen) {
 	left_len = msg_iov->iov_len - take_len;
@@ -313,8 +317,10 @@ int XioConnection::on_msg_req(struct xio_session *session,
   blen = header.middle_len;
 
   if (blen && left_len) {
-    middle.append(
-      buffer::create_msg(left_len, left_base, m_hook));
+    m_hook->get();
+    middle.append(buffer::claim_buffer(
+            left_len, left_base,
+            make_deleter([m_hook]() { m_hook->put(); }));
     left_len = 0;
   }
 
@@ -325,9 +331,10 @@ int XioConnection::on_msg_req(struct xio_session *session,
     for (; blen && (ix < iov_len); ++ix) {
       msg_iov = &iovs[ix];
       take_len = MIN(blen, msg_iov->iov_len);
-      middle.append(
-	buffer::create_msg(
-	  take_len, (char*) msg_iov->iov_base, m_hook));
+      m_hook->get();
+      middle.append(buffer::claim_buffer(
+              take_len, (char*)msg_iov->iov_base,
+              make_deleter([m_hook]() { m_hook->put(); })));
       blen -= take_len;
       if (! blen) {
 	left_len = msg_iov->iov_len - take_len;
@@ -345,8 +352,9 @@ int XioConnection::on_msg_req(struct xio_session *session,
   blen = header.data_len;
 
   if (blen && left_len) {
-    data.append(
-      buffer::create_msg(left_len, left_base, m_hook));
+    m_hook->get();
+    data.append(buffer::claim_buffer(
+            left_len, left_base, make_deleter([m_hook]() { m_hook->put(); })));
     left_len = 0;
   }
 
@@ -356,9 +364,10 @@ int XioConnection::on_msg_req(struct xio_session *session,
     iovs = vmsg_sglist(&treq->in);
     for (; blen && (ix < iov_len); ++ix) {
       msg_iov = &iovs[ix];
-      data.append(
-	buffer::create_msg(
-	  msg_iov->iov_len, (char*) msg_iov->iov_base, m_hook));
+      m_hook->get();
+      data.append(buffer::claim_buffer(
+              msg_iov->iov_len, (char*)msg_iov->iov_base,
+              make_deleter([m_hook]() { m_hook->put(); })));
       blen -= msg_iov->iov_len;
     }
     if (ix == iov_len) {

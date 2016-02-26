@@ -65,7 +65,6 @@
 
 #if defined(HAVE_XIO)
 struct xio_reg_mem;
-class XioDispatchHook;
 #endif
 
 namespace ceph {
@@ -141,7 +140,6 @@ namespace buffer CEPH_BUFFER_API {
   class deleter;
 
   class xio_mempool;
-  class xio_msg_buffer;
 
   /*
    * named constructors 
@@ -158,10 +156,6 @@ namespace buffer CEPH_BUFFER_API {
   raw* create_unshareable(unsigned len);
   raw* create_static(unsigned len, char *buf);
   raw* claim_buffer(unsigned len, char *buf, deleter del);
-
-#if defined(HAVE_XIO)
-  raw* create_msg(unsigned len, char *buf, XioDispatchHook *m_hook);
-#endif
 
   /*
    * a buffer pointer.  references (a subsequence of) a raw buffer.

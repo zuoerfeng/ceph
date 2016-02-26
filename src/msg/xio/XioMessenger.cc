@@ -1094,7 +1094,7 @@ void XioMessenger::mark_down_on_empty(Connection* con)
   XioConnection *xcon = static_cast<XioConnection*>(con);
   MNop* m = new MNop();
   m->tag = XIO_NOP_TAG_MARKDOWN;
-  m->set_completion_hook(pool_alloc_markdown_hook(xcon, m));
+  m->add_completion_hook([xcon, m]() { pool_alloc_markdown_hook(xcon, m); });
   // stall new messages
   xcon->cstate.session_state.set(XioConnection::BARRIER);
   (void) _send_message_impl(m, xcon);

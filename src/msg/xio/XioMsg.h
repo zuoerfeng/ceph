@@ -270,8 +270,7 @@ public:
     }
 };
 
-class XioDispatchHook : public Message::CompletionHook
-{
+class XioDispatchHook {
 private:
   XioConnection *xcon;
   XioInSeq msg_seq;
@@ -296,14 +295,6 @@ public:
       ++xcon->n_reqs; // atomicity by portal thread
       xpool_inc_hookcnt();
     }
-
-  virtual void finish(int r) {
-    this->put();
-  }
-
-  virtual void complete(int r) {
-    finish(r);
-  }
 
   int release_msgs();
 
@@ -333,7 +324,7 @@ public:
     /* can't decode message; even with one-way must free
      * xio_msg structures, and then xiopool
      */
-    this->finish(-1);
+    this->put();
   }
 
   ~XioDispatchHook() {

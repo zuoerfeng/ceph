@@ -226,22 +226,13 @@ protected:
   bi::list_member_hook<> dispatch_q;
 
 public:
-  class CompletionHook : public Context {
-  protected:
-    Message *m;
-    friend class Message;
-  public:
-    explicit CompletionHook(Message *_m) : m(_m) {}
-    virtual void set_message(Message *_m) { m = _m; }
-  };
-
   typedef bi::list< Message,
 		    bi::member_hook< Message,
 				     bi::list_member_hook<>,
 				     &Message::dispatch_q > > Queue;
 
 protected:
-  CompletionHook* completion_hook; // owned by Messenger
+  deleter del; // owned by Messenger
 
   // release our size in bytes back to this throttler when our payload
   // is adjusted or when we are destroyed.
@@ -263,7 +254,7 @@ public:
   Message()
     : connection(NULL),
       magic(0),
-      completion_hook(NULL),
+      del(),
       byte_throttler(NULL),
       msg_throttler(NULL),
       dispatch_throttle_size(0) {
@@ -295,17 +286,16 @@ protected:
     if (byte_throttler)
       byte_throttler->put(payload.length() + middle.length() + data.length());
     release_message_throttle();
-    /* call completion hooks (if any) */
-    if (completion_hook)
-      completion_hook->complete(0);
   }
 public:
   const ConnectionRef& get_connection() const { return connection; }
   void set_connection(const ConnectionRef& c) {
     connection = c;
   }
-  CompletionHook* get_completion_hook() { return completion_hook; }
-  void set_completion_hook(CompletionHook *hook) { completion_hook = hook; }
+  template<typename CompletionHook>
+  void add_completion_hook(CompletionHook hook) {
+    del = make_deleter(std::move(del), std::move(hook));
+  }
   void set_byte_throttler(Throttle *t) { byte_throttler = t; }
   Throttle *get_byte_throttler() { return byte_throttler; }
   void set_message_throttler(Throttle *t) { msg_throttler = t; }

@@ -1763,6 +1763,19 @@ target_link_libraries(test_async_transport
     ${ALLOC_LIBS}
     ${UNITTEST_LIBS})
 
+# test_userspace_event
+add_executable(test_userspace_event
+  msgr/test_userspace_event.cc
+  $<TARGET_OBJECTS:heap_profiler_objs>
+  )
+set_target_properties(test_userspace_event PROPERTIES COMPILE_FLAGS
+  ${UNITTEST_CXX_FLAGS})
+target_link_libraries(test_userspace_event
+    global
+    ${CMAKE_DL_LIBS}
+    ${ALLOC_LIBS}
+    ${UNITTEST_LIBS})
+
 # test_msgr
 add_executable(test_msgr
   msgr/test_msgr.cc

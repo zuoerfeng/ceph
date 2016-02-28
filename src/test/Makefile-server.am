@@ -13,6 +13,13 @@ ceph_test_async_networkstack_LDADD = $(LIBOS) $(UNITTEST_LDADD) $(CEPH_GLOBAL)
 ceph_test_async_networkstack_CXXFLAGS = $(UNITTEST_CXXFLAGS)
 bin_DEBUGPROGRAMS += ceph_test_async_networkstack
 
+if WITH_DPDK
+ceph_test_userspace_event_SOURCES = test/msgr/test_userspace_event.cc
+ceph_test_userspace_event_LDADD = $(LIBOS) $(UNITTEST_LDADD) $(CEPH_GLOBAL)
+ceph_test_userspace_event_CXXFLAGS = $(UNITTEST_CXXFLAGS)
+bin_DEBUGPROGRAMS += ceph_test_userspace_event
+endif
+
 ceph_test_trans_SOURCES = test/test_trans.cc
 ceph_test_trans_LDADD = $(LIBOS) $(CEPH_GLOBAL)
 bin_DEBUGPROGRAMS += ceph_test_trans

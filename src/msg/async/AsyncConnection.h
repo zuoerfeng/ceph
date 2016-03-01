@@ -30,9 +30,9 @@ using namespace std;
 #include "include/buffer.h"
 #include "msg/Connection.h"
 #include "msg/Messenger.h"
+#include "GenericSocket.h"
 
 #include "Event.h"
-#include "net_handler.h"
 
 class AsyncMessenger;
 
@@ -46,10 +46,7 @@ static const int ASYNC_IOV_MAX = (IOV_MAX >= 1024 ? IOV_MAX / 4 : IOV_MAX);
  * sequence, try to reconnect peer endpoint.
  */
 class AsyncConnection : public Connection {
-
-  ssize_t read_bulk(int fd, char *buf, unsigned len);
-  void suppress_sigpipe();
-  void restore_sigpipe();
+  ssize_t read_bulk(char *buf, unsigned len);
   ssize_t do_sendmsg(struct msghdr &msg, unsigned len, bool more);
   ssize_t try_send(bufferlist &bl, bool send=true, bool more=false) {
     Mutex::Locker l(write_lock);
@@ -97,10 +94,6 @@ class AsyncConnection : public Connection {
     assert(write_lock.is_locked());
     return !out_q.empty() || outcoming_bl.length();
   }
-  void shutdown_socket() {
-    if (sd >= 0)
-      ::shutdown(sd, SHUT_RDWR);
-  }
   Message *_get_next_outgoing(bufferlist *bl) {
     assert(write_lock.is_locked());
     Message *m = 0;
@@ -124,7 +117,7 @@ class AsyncConnection : public Connection {
   }
 
  public:
-  AsyncConnection(CephContext *cct, AsyncMessenger *m, EventCenter *c, PerfCounters *p);
+  AsyncConnection(CephContext *cct, AsyncMessenger *m, EventCenter *c, PerfCounters *p, NetworkStack *s);
   ~AsyncConnection();
 
   ostream& _conn_prefix(std::ostream *_dout);
@@ -142,7 +135,7 @@ class AsyncConnection : public Connection {
     _connect();
   }
   // Only call when AsyncConnection first construct
-  void accept(int sd);
+  void accept(ConnectedSocket socket, entity_addr_t &addr);
   int send_message(Message *m) override;
 
   void send_keepalive() override;
@@ -229,13 +222,14 @@ class AsyncConnection : public Connection {
 
   AsyncMessenger *async_msgr;
   PerfCounters *logger;
+  NetworkStack *transport;
   int global_seq;
   __u32 connect_seq, peer_global_seq;
   atomic_t out_seq;
   atomic_t ack_left, in_seq;
   int state;
   int state_after_send;
-  int sd;
+  ConnectedSocket cs;
   int port;
   Messenger::Policy policy;
 
@@ -299,15 +293,8 @@ class AsyncConnection : public Connection {
   char *state_buffer;
   // used only by "read_until"
   uint64_t state_offset;
-  NetHandler net;
   EventCenter *center;
   ceph::shared_ptr<AuthSessionHandler> session_security;
-
-#if !defined(MSG_NOSIGNAL) && !defined(SO_NOSIGPIPE)
-  sigset_t sigpipe_mask;
-  bool sigpipe_pending;
-  bool sigpipe_unblock;
-#endif
 
  public:
   // used by eventcallback
@@ -327,10 +314,10 @@ class AsyncConnection : public Connection {
          it != register_time_events.end(); ++it)
       center->delete_time_event(*it);
     register_time_events.clear();
-    if (sd >= 0) {
-      center->delete_file_event(sd, EVENT_READABLE|EVENT_WRITABLE);
-      shutdown_socket();
-      ::close(sd);
+    if (cs.fd() >= 0) {
+      center->delete_file_event(cs.fd(), EVENT_READABLE|EVENT_WRITABLE);
+      cs.shutdown();
+      cs.close();
     }
 
     delete read_handler;

@@ -302,7 +302,7 @@ set(libcommon_files
   msg/async/EventEpoll.cc
   msg/async/EventSelect.cc
   msg/async/net_handler.cc
-  msg/async/GenericSocket.cc
+  msg/async/Stack.cc
   msg/async/PosixStack.cc
   ${xio_common_srcs}
   ${dpdk_common_srcs}

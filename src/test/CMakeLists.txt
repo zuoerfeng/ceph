@@ -1782,7 +1782,7 @@ add_executable(test_msgr
   )
 set_target_properties(test_msgr PROPERTIES COMPILE_FLAGS
   ${UNITTEST_CXX_FLAGS})
-target_link_libraries(test_msgr os global ${BLKID_LIBRARIES} ${CMAKE_DL_LIBS} ${UNITTEST_LIBS})
+target_link_libraries(test_msgr global ${BLKID_LIBRARIES} ${CMAKE_DL_LIBS} ${UNITTEST_LIBS})
 
 #test_mon_msg
 add_executable(test_mon_msg mon/test-mon-msg.cc)

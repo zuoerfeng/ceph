@@ -1751,13 +1751,13 @@ set_target_properties(test_async_driver PROPERTIES COMPILE_FLAGS
 target_link_libraries(test_async_driver os global ${BLKID_LIBRARIES} ${CMAKE_DL_LIBS} ${UNITTEST_LIBS})
 
 # test_async_driver
-add_executable(test_async_transport
-  msgr/test_async_transport.cc
+add_executable(test_async_networkstack
+  msgr/test_async_networkstack.cc
   $<TARGET_OBJECTS:heap_profiler_objs>
   )
-set_target_properties(test_async_transport PROPERTIES COMPILE_FLAGS
+set_target_properties(test_async_networkstack PROPERTIES COMPILE_FLAGS
   ${UNITTEST_CXX_FLAGS})
-target_link_libraries(test_async_transport
+target_link_libraries(test_async_networkstack
     global
     ${CMAKE_DL_LIBS}
     ${ALLOC_LIBS}

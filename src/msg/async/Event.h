@@ -89,7 +89,7 @@ class EventDriver {
  * EventCenter maintain a set of file descriptor and handle registered events.
  */
 class EventCenter {
-  thread_local static pthread_t thread_id;
+  thread_local static unsigned thread_id;
 
   struct FileEvent {
     int mask;
@@ -161,7 +161,6 @@ class EventCenter {
   int notify_receive_fd;
   int notify_send_fd;
   NetHandler net;
-  pthread_t owner = 0;
   EventCallbackRef notify_handler;
   unsigned id = 0;
 
@@ -178,7 +177,7 @@ class EventCenter {
     cct(c), nevent(0),
     external_num_events(0),
     driver(NULL), time_event_next_id(1),
-    notify_receive_fd(-1), notify_send_fd(-1), net(c), owner(0),
+    notify_receive_fd(-1), notify_send_fd(-1), net(c),
     notify_handler(NULL),
     already_wakeup(0) {
     last_time = time(NULL);
@@ -186,10 +185,9 @@ class EventCenter {
   ~EventCenter();
   ostream& _event_prefix(std::ostream *_dout);
 
-  int init(int nevent, string type);
-  void set_owner(unsigned i = 0);
-  pthread_t get_owner() { return owner; }
-  unsigned cpu_id() { return id; }
+  int init(int nevent);
+  void set_id(unsigned i);
+  unsigned get_id() { return id; }
 
   EventDriver *get_driver() { return driver; }
 
@@ -251,5 +249,6 @@ class EventCenter {
     }
   };
 };
+
 
 #endif

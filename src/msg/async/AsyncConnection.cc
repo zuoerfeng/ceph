@@ -146,7 +146,7 @@ class C_clean_handler : public EventCallback {
  public:
   explicit C_clean_handler(AsyncConnectionRef c): conn(c) {}
   void do_request(int id) {
-    conn->cleanup_handler();
+    conn->cleanup();
     delete this;
   }
 };
@@ -188,6 +188,7 @@ AsyncConnection::AsyncConnection(CephContext *cct, AsyncMessenger *m, Worker *w)
   connect_handler = new C_deliver_connect(async_msgr, this);
   local_deliver_handler = new C_local_deliver(this);
   wakeup_handler = new C_time_wakeup(this);
+  cleanup_handler = nullptr;
   memset(msgvec, 0, sizeof(msgvec));
   // double recv_max_prefetch see "read_until"
   recv_buf = new char[2*recv_max_prefetch];
@@ -231,7 +232,7 @@ ssize_t AsyncConnection::read_bulk(char *buf, unsigned len)
 // else return < 0 means error
 ssize_t AsyncConnection::_try_send(bool send, bool more)
 {
-  if (!send)
+  if (!send || !outcoming_bl.length())
     return 0;
 
   if (async_msgr->cct->_conf->ms_inject_socket_failures && cs) {
@@ -1670,13 +1671,12 @@ ssize_t AsyncConnection::handle_connect_msg(ceph_msg_connect &connect, bufferlis
       existing->is_reset_from_peer = true;
     }
 
-    int pre_exist_fd = existing->cs.fd();
     center->delete_file_event(cs.fd(), EVENT_READABLE|EVENT_WRITABLE);
     // Now existing connection will be alive and the current connection will
     // exchange socket with existing connection because we want to maintain
     // original "connection_state"
-    std::swap(existing->sd, sd);
-    _stop();
+    std::swap(existing->cs, cs);
+    _stop(true);
     ldout(async_msgr->cct, 1) << __func__ << " stop myself to swap existing" << dendl;
 
     reply.global_seq = existing->peer_global_seq;
@@ -1694,6 +1694,7 @@ ssize_t AsyncConnection::handle_connect_msg(ceph_msg_connect &connect, bufferlis
     // there shouldn't exist any buffer
     assert(recv_start == recv_end);
 
+    reply.global_seq = existing->peer_global_seq;
     existing->write_lock.Unlock();
     existing->lock.Unlock();
 
@@ -1701,20 +1702,22 @@ ssize_t AsyncConnection::handle_connect_msg(ceph_msg_connect &connect, bufferlis
     // previous existing->sd now is closed, no event will notify
     // existing(EventCenter*) from now.
     // Note: potential wait, but it should not be a problem
-    existing->center->submit_event([existing, connect, reply, authorizer_reply, pre_exist_fd]() mutable {
+    existing->center->submit_event([this, existing, connect, reply, authorizer_reply]() mutable {
       Mutex::Locker l(existing->lock);
+      if (cs)
+        existing->center->delete_file_event(cs.fd(), EVENT_READABLE|EVENT_WRITABLE);
       if (existing->state != STATE_ACCEPTING_WAIT_CONNECT_MSG) {
         existing->fault();
+        center->dispatch_event_external(cleanup_handler);
         return ;
       }
-      reply.global_seq = existing->peer_global_seq;
-      if (pre_exist_fd >= 0)
-        existing->center->delete_file_event(pre_exist_fd, EVENT_READABLE|EVENT_WRITABLE);
-      existing->center->create_file_event(existing->sd, EVENT_READABLE, existing->read_handler);
+
+      existing->center->create_file_event(existing->cs.fd(), EVENT_READABLE, existing->read_handler);
       if (existing->_reply_accept(CEPH_MSGR_TAG_RETRY_GLOBAL, connect, reply, authorizer_reply) < 0) {
         // handle error
         existing->fault();
       }
+      center->dispatch_event_external(cleanup_handler);
     }, true);
 
     return 0;
@@ -2013,8 +2016,8 @@ void AsyncConnection::fault()
 
   write_lock.Lock();
   if (cs) {
-    cs.shutdown();
     center->delete_file_event(cs.fd(), EVENT_READABLE|EVENT_WRITABLE);
+    cs.shutdown();
     cs.close();
   }
   can_write = NOWRITE;
@@ -2095,7 +2098,7 @@ void AsyncConnection::was_session_reset()
   can_write = NOWRITE;
 }
 
-void AsyncConnection::_stop()
+void AsyncConnection::_stop(bool delay_cleanup)
 {
   assert(lock.is_locked());
   if (state == STATE_CLOSED)
@@ -2111,8 +2114,11 @@ void AsyncConnection::_stop()
   open_write = false;
   can_write = CLOSED;
   state_offset = 0;
+
   // Make sure in-queue events will been processed
-  center->dispatch_event_external(EventCallbackRef(new C_clean_handler(this)));
+  cleanup_handler = new C_clean_handler(this);
+  if (!delay_cleanup)
+    center->dispatch_event_external(cleanup_handler);
 }
 
 void AsyncConnection::prepare_send_message(uint64_t features, Message *m, bufferlist &bl)
@@ -2352,7 +2358,8 @@ void AsyncConnection::handle_write()
     if (state == STATE_STANDBY && !policy.server && is_queued()) {
       ldout(async_msgr->cct, 10) << __func__ << " policy.server is false" << dendl;
       _connect();
-    } else if (cs && state != STATE_CONNECTING && state != STATE_CONNECTING_RE && state != STATE_CLOSED) {
+    } else if (cs && state != STATE_CONNECTING && state != STATE_CONNECTING_RE &&
+               state != STATE_CLOSED) {
       r = _try_send();
       if (r < 0) {
         ldout(async_msgr->cct, 1) << __func__ << " send outcoming bl failed" << dendl;

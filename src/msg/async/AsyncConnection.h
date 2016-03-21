@@ -117,7 +117,7 @@ class AsyncConnection : public Connection {
   }
 
  public:
-  AsyncConnection(CephContext *cct, AsyncMessenger *m, Worker *w);
+  AsyncConnection(CephContext *cct, AsyncMessenger *m, Worker *w, bool local);
   ~AsyncConnection();
 
   ostream& _conn_prefix(std::ostream *_dout);
@@ -232,6 +232,7 @@ class AsyncConnection : public Connection {
   ConnectedSocket cs;
   int port;
   Messenger::Policy policy;
+  bool local_stack;
 
   Mutex write_lock;
   enum {

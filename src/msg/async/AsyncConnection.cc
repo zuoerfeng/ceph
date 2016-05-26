@@ -1309,6 +1309,8 @@ ssize_t AsyncConnection::_process_connection()
           session_security.reset();
         }
 
+        if (delay_state)
+          assert(delay_state->ready());
         dispatch_queue->queue_connect(this);
         async_msgr->ms_deliver_handle_fast_connect(this);
 
@@ -1484,6 +1486,8 @@ ssize_t AsyncConnection::_process_connection()
         state = STATE_OPEN;
         memset(&connect_msg, 0, sizeof(connect_msg));
 
+        if (delay_state)
+          assert(delay_state->ready());
         // make sure no pending tick timer
         center->delete_time_event(last_tick_id);
         last_tick_id = center->create_time_event(
@@ -2428,6 +2432,8 @@ void AsyncConnection::DelayedDelivery::do_request(int id)
   {
     Mutex::Locker l(delay_lock);
     register_time_events.erase(id);
+    if (stop_dispatch)
+      return ;
     if (delay_queue.empty())
       return ;
     utime_t release = delay_queue.front().first;
@@ -2449,6 +2455,7 @@ void AsyncConnection::DelayedDelivery::do_request(int id)
 }
 
 void AsyncConnection::DelayedDelivery::flush() {
+  stop_dispatch = true;
   EventCenter::submit_to(
       center->get_id(), [this] () mutable {
     Mutex::Locker l(delay_lock);
@@ -2464,6 +2471,7 @@ void AsyncConnection::DelayedDelivery::flush() {
     for (auto i : register_time_events)
       center->delete_time_event(i);
     register_time_events.clear();
+    stop_dispatch = false;
   }, true);
 }
 

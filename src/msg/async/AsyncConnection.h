@@ -164,6 +164,7 @@ class AsyncConnection : public Connection {
       assert(register_time_events.empty());
       assert(delay_queue.empty());
     }
+    void set_center(EventCenter *c) { center = c; }
     void do_request(int id) override;
     void queue(double delay_period, utime_t release, Message *m) {
       Mutex::Locker l(delay_lock);
@@ -396,7 +397,7 @@ class AsyncConnection : public Connection {
     if (need_queue_reset)
       dispatch_queue->queue_reset(this);
   }
-  void cleanup_handler() {
+  void cleanup() {
     shutdown_socket();
     delete read_handler;
     delete write_handler;

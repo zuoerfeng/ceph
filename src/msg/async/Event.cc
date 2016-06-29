@@ -150,6 +150,7 @@ void EventCenter::set_owner()
 
 int EventCenter::create_file_event(int fd, int mask, EventCallbackRef ctxt)
 {
+  assert(in_thread());
   int r = 0;
   if (fd >= nevent) {
     int new_size = nevent << 2;
@@ -194,7 +195,7 @@ int EventCenter::create_file_event(int fd, int mask, EventCallbackRef ctxt)
 
 void EventCenter::delete_file_event(int fd, int mask)
 {
-  assert(fd >= 0);
+  assert(in_thread() && fd >= 0);
   if (fd >= nevent) {
     ldout(cct, 1) << __func__ << " delete event fd=" << fd << " is equal or greater than nevent=" << nevent
                   << "mask=" << mask << dendl;

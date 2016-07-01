@@ -104,8 +104,16 @@ class AsyncConnection : public Connection {
     return !out_q.empty() || outcoming_bl.length();
   }
   void shutdown_socket() {
-    if (sd >= 0)
+    for (auto &&t : register_time_events)
+      center->delete_time_event(t);
+    register_time_events.clear();
+    center->delete_time_event(last_tick_id);
+    if (sd >= 0) {
+      center->delete_file_event(sd, EVENT_READABLE|EVENT_WRITABLE);
       ::shutdown(sd, SHUT_RDWR);
+      ::close(sd);
+      sd = -1;
+    }
   }
   Message *_get_next_outgoing(bufferlist *bl) {
     assert(write_lock.is_locked());
@@ -389,16 +397,7 @@ class AsyncConnection : public Connection {
       dispatch_queue->queue_reset(this);
   }
   void cleanup_handler() {
-    for (auto &&t : register_time_events)
-      center->delete_time_event(t);
-    register_time_events.clear();
-    center->delete_time_event(last_tick_id);
-    if (sd >= 0) {
-      center->delete_file_event(sd, EVENT_READABLE|EVENT_WRITABLE);
-      shutdown_socket();
-      ::close(sd);
-      sd = -1;
-    }
+    shutdown_socket();
     delete read_handler;
     delete write_handler;
     delete wakeup_handler;

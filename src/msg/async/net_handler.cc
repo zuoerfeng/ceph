@@ -89,7 +89,7 @@ void NetHandler::set_close_on_exec(int sd)
   }
 }
 
-void NetHandler::set_socket_options(int sd, bool nodelay, int size)
+int NetHandler::set_socket_options(int sd, bool nodelay, int size)
 {
   // disable Nagle algorithm?
   if (nodelay) {
@@ -117,6 +117,7 @@ void NetHandler::set_socket_options(int sd, bool nodelay, int size)
     ldout(cct,0) << "couldn't set SO_NOSIGPIPE: " << cpp_strerror(r) << dendl;
   }
 #endif
+  return r;
 }
 
 void NetHandler::set_priority(int sd, int prio)

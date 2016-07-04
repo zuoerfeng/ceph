@@ -1830,7 +1830,7 @@ ssize_t AsyncConnection::handle_connect_msg(ceph_msg_connect &connect, bufferlis
     _stop();
     dispatch_queue->queue_reset(this);
     ldout(async_msgr->cct, 1) << __func__ << " stop myself to swap existing" << dendl;
-    existing->can_write = WriteStatus::NOWRITE;
+    existing->can_write = WriteStatus::CLOSED;
     existing->open_write = false;
     existing->replacing = true;
     existing->state_offset = 0;
@@ -2039,6 +2039,7 @@ int AsyncConnection::send_message(Message *m)
     if (can_write != WriteStatus::CLOSED) {
       dispatch_queue->local_delivery(m, m->get_priority());
     } else {
+      assert(state == STATE_CLOSED);
       ldout(async_msgr->cct, 10) << __func__ << " loopback connection closed."
                                  << " Drop message " << m << dendl;
       m->put();
@@ -2526,7 +2527,7 @@ void AsyncConnection::send_keepalive()
 {
   ldout(async_msgr->cct, 10) << __func__ << " started." << dendl;
   Mutex::Locker l(write_lock);
-  if (can_write != WriteStatus::CLOSED) {
+  if (can_write != WriteStatus::CANWRITE) {
     keepalive = true;
     center->dispatch_event_external(write_handler);
   }

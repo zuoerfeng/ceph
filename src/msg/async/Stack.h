@@ -18,6 +18,7 @@
 #define CEPH_MSG_ASYNC_STACK_H
 
 #include "common/perf_counters.h"
+#include "common/simple_spin.h"
 #include "msg/msg_types.h"
 #include "msg/async/Event.h"
 
@@ -193,17 +194,21 @@ enum {
 };
 
 class Worker {
+  std::mutex init_lock;
+  std::condition_variable init_cond;
+  bool init = false;
+
  public:
-  bool init_done = false;
   bool done = false;
 
   CephContext *cct;
   PerfCounters *perf_logger;
   unsigned id;
 
+  std::atomic_uint references;
   EventCenter center;
   Worker(CephContext *c, unsigned i)
-    : cct(c), perf_logger(NULL), id(i), center(c) {
+    : cct(c), perf_logger(NULL), id(i), references(0), center(c) {
     char name[128];
     sprintf(name, "AsyncMessenger::Worker-%d", id);
     // initialize perf_logger
@@ -214,8 +219,8 @@ class Worker {
     plb.add_u64_counter(l_msgr_send_messages_inline, "msgr_send_messages_inline", "Network sent inline messages");
     plb.add_u64_counter(l_msgr_recv_bytes, "msgr_recv_bytes", "Network received bytes");
     plb.add_u64_counter(l_msgr_send_bytes, "msgr_send_bytes", "Network received bytes");
-    plb.add_u64_counter(l_msgr_created_connections, "msgr_active_connections", "Active connection number");
-    plb.add_u64_counter(l_msgr_active_connections, "msgr_created_connections", "Created connection number");
+    plb.add_u64_counter(l_msgr_active_connections, "msgr_active_connections", "Active connection number");
+    plb.add_u64_counter(l_msgr_created_connections, "msgr_created_connections", "Created connection number");
 
     perf_logger = plb.create_perf_counters();
     cct->get_perfcounters_collection()->add(perf_logger);
@@ -233,15 +238,38 @@ class Worker {
                       const SocketOptions &opts, ConnectedSocket *socket) = 0;
 
   virtual void initialize() {}
-  virtual void destroy() {}
   PerfCounters *get_perf_counter() { return perf_logger; }
+  void release_worker() {
+    int oldref = references.fetch_sub(1);
+    assert(oldref > 0);
+  }
+  void init_done() {
+    init_lock.lock();
+    init = true;
+    init_cond.notify_all();
+    init_lock.unlock();
+  }
+  void wait_for_init() {
+    std::unique_lock<std::mutex> l(init_lock);
+    while (!init)
+      init_cond.wait(l);
+  }
+  void reset() {
+    init_lock.lock();
+    init = false;
+    init_cond.notify_all();
+    init_lock.unlock();
+    done = false;
+  }
 };
 
 class NetworkStack {
-  bool started = false;
+  std::string type;
+  std::atomic_bool started;
   unsigned num_workers = 0;
-  uint64_t seq = 0;
-  string type;
+  simple_spinlock_t pool_spin = SIMPLE_SPINLOCK_INITIALIZER;
+
+  void add_thread(unsigned i);
 
  protected:
   CephContext *cct;
@@ -266,15 +294,13 @@ class NetworkStack {
 
   void start();
   void stop();
-  virtual Worker *get_worker() {
-    return workers[(seq++)%workers.size()];
-  }
+  virtual Worker *get_worker();
   Worker *get_worker(unsigned i) {
     return workers[i];
   }
   void barrier();
-  uint64_t get_num_worker() const {
-    return workers.size();
+  unsigned get_num_worker() const {
+    return num_workers;
   }
 
   // direct is used in tests only

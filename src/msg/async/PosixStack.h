@@ -49,9 +49,8 @@ class PosixNetworkStack : public NetworkStack {
     return coreids[id % coreids.size()];
   }
   virtual void spawn_workers(std::vector<std::function<void ()>> &funcs) override {
-    // used to tests
-    for (auto &&func : funcs)
-      threads.emplace_back(std::thread(std::move(func))); // this is happen in actual env
+    for (unsigned i = threads.size(); i < funcs.size(); ++i)
+      threads.emplace_back(std::thread(std::move(funcs[i])));
   }
   virtual void join_workers() override {
     for (auto &&t : threads)

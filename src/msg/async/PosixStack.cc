@@ -260,13 +260,15 @@ class PosixServerSocketImpl : public ServerSocketImpl {
 
 int PosixServerSocketImpl::accept(ConnectedSocket *sock, const SocketOptions &opt, entity_addr_t *out) {
   assert(sock);
-  socklen_t slen = sizeof(out->ss_addr());
-  int sd = ::accept(_fd, (sockaddr*)&out->ss_addr(), &slen);
+  sockaddr_storage ss;
+  socklen_t slen = sizeof(ss);
+  int sd = ::accept(_fd, (sockaddr*)&ss, &slen);
   if (sd < 0) {
     return -errno;
   }
 
-  net.set_close_on_exec(listen_sd);
+  out->set_sockaddr((sockaddr*)&ss);
+  handler.set_close_on_exec(sd);
   int r = handler.set_nonblock(sd);
   if (r < 0) {
     ::close(sd);
@@ -319,10 +321,10 @@ int PosixWorker::listen(entity_addr_t &sa, const SocketOptions &opt,
     return -errno;
   }
 
-  r = ::bind(listen_sd, (struct sockaddr *)&sa.ss_addr(), sa.addr_size());
+  r = ::bind(listen_sd, sa.get_sockaddr(), sa.get_sockaddr_len());
   if (r < 0) {
     r = -errno;
-    lderr(cct) << __func__ << " unable to bind to " << sa.ss_addr()
+    lderr(cct) << __func__ << " unable to bind to " << sa.get_sockaddr()
                << ": " << cpp_strerror(r) << dendl;
     ::close(listen_sd);
     return r;
@@ -375,56 +377,4 @@ PosixNetworkStack::PosixNetworkStack(CephContext *c, const string &t)
     else
       lderr(cct) << __func__ << " failed to parse " << *it << " in " << cct->_conf->ms_async_affinity_cores << dendl;
   }
-}
-
-Worker* PosixNetworkStack::get_worker()
-{
-  ldout(cct, 10) << __func__ << dendl;
-
-   // start with some reasonably large number
-  unsigned min_load = std::numeric_limits<int>::max();
-  Worker* current_best = nullptr;
-
-  simple_spin_lock(&pool_spin);
-  // find worker with least references
-  // tempting case is returning on references == 0, but in reality
-  // this will happen so rarely that there's no need for special case.
-  for (auto p = workers.begin(); p != workers.end(); ++p) {
-    unsigned worker_load = (*p)->references.load();
-    ldout(cct, 20) << __func__ << " Worker " << *p << " load: " << worker_load << dendl;
-    if (worker_load < min_load) {
-      current_best = *p;
-      min_load = worker_load;
-    }
-  }
-
-  // if minimum load exceeds amount of workers, make a new worker
-  // logic behind this is that we're not going to create new worker
-  // just because others have *some* load, we'll defer worker creation
-  // until others have *plenty* of load. This will cause new worker
-  // to get assigned to all new connections *unless* one or more
-  // of workers get their load reduced - in that case, this worker
-  // will be assigned to new connection.
-  // TODO: add more logic and heuristics, so connections known to be
-  // of light workload (heartbeat service, etc.) won't overshadow
-  // heavy workload (clients, etc).
-  if (!current_best || ((workers.size() < (unsigned)cct->_conf->ms_async_max_op_threads)
-      && (min_load > workers.size()))) {
-     ldout(cct, 20) << __func__ << " creating worker" << dendl;
-     current_best = new Worker(cct, this, workers.size());
-     workers.push_back(current_best);
-     pending++;
-     current_best->create("ms_async_worker");
-  } else {
-    ldout(cct, 20) << __func__ << " picked " << current_best 
-                   << " as best worker with load " << min_load << dendl;
-  }
-
-  ++current_best->references;
-  simple_spin_unlock(&pool_spin);
-
-  while (pending)
-    usleep(50);
-  assert(current_best);
-  return current_best;
 }

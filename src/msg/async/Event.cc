@@ -367,6 +367,7 @@ int EventCenter::process_events(int timeout_microseconds)
       external_lock.unlock();
       while (!cur_process.empty()) {
         EventCallbackRef e = cur_process.front();
+        ldout(cct, 20) << __func__ << " do " << e << dendl;
         if (e)
           e->do_request(0);
         cur_process.pop_front();
@@ -386,5 +387,5 @@ void EventCenter::dispatch_event_external(EventCallbackRef e)
   if (!in_thread())
     wakeup();
 
-  ldout(cct, 10) << __func__ << " " << e << " pending " << num << dendl;
+  ldout(cct, 20) << __func__ << " " << e << " pending " << num << dendl;
 }

@@ -2355,8 +2355,8 @@ void AsyncConnection::send_keepalive()
 
 void AsyncConnection::mark_down()
 {
-  ldout(async_msgr->cct, 1) << __func__ << " started." << dendl;
   Mutex::Locker l(lock);
+  ldout(async_msgr->cct, 1) << __func__ << " started." << dendl;
   _stop();
 }
 

@@ -245,21 +245,6 @@ if(NOT PYTHONINTERP_FOUND)
 endif(NOT PYTHONINTERP_FOUND)
 find_package(PythonLibs REQUIRED)
 
-# if CMAKE_INSTALL_PREFIX is an empty string, must replace
-# it with "/" to make PYTHON_INSTALL_TEMPLATE an absolute path to be
-# consistent with all other installation paths.
-if(CMAKE_INSTALL_PREFIX)
-  set(PYTHON_INSTALL_TEMPLATE "${CMAKE_INSTALL_PREFIX}")
-else(CMAKE_INSTALL_PREFIX)
-  set(PYTHON_INSTALL_TEMPLATE "/")
-endif(CMAKE_INSTALL_PREFIX)
-
-execute_process(
-  COMMAND
-  ${PYTHON_EXECUTABLE} -c "from distutils import sysconfig; print sysconfig.get_python_lib(1,0,prefix='${PYTHON_INSTALL_TEMPLATE}')"
-  OUTPUT_VARIABLE PYTHON_INSTDIR
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
-
 if(HAVE_XIO)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -I${XIO_INCLUDE_DIR}")
   list(APPEND EXTRALIBS ${XIO_LIBRARY} pthread rt)
@@ -540,9 +525,6 @@ add_library(global STATIC ${libglobal_srcs}
   $<TARGET_OBJECTS:global_common_objs>)
 target_link_libraries(global common ${CMAKE_THREAD_LIBS_INIT} ${CRYPTO_LIBS}
   ${EXTRALIBS})
-if(${WITH_LTTNG})
-  target_link_libraries(global lttng-ust dl)
-endif(${WITH_LTTNG})
 
 # rados object classes
 add_subdirectory(cls)
@@ -564,7 +546,6 @@ add_library(librados_objs OBJECT
   librados/RadosClient.cc)
 add_library(librados ${CEPH_SHARED}
   librados/librados.cc
-  $<TARGET_OBJECTS:cls_references_objs>
   $<TARGET_OBJECTS:common_util_obj>
   $<TARGET_OBJECTS:librados_objs>)
 add_dependencies(librados osdc)
@@ -572,7 +553,7 @@ if(WITH_LTTNG)
   add_dependencies(librados rados-tp)
 endif()
 # LINK_PRIVATE instead of PRIVATE is used to backward compatibility with cmake 2.8.11
-target_link_libraries(librados LINK_PRIVATE osdc osd os global common cls_lock_client
+target_link_libraries(librados LINK_PRIVATE osdc common cls_lock_client
   ${BLKID_LIBRARIES} ${CRYPTO_LIBS} ${EXTRALIBS})
 if(ENABLE_SHARED)
   set_target_properties(librados PROPERTIES
@@ -626,7 +607,7 @@ target_link_libraries(ceph-monstore-tool os global ${Boost_PROGRAM_OPTIONS_LIBRA
 install(TARGETS ceph-monstore-tool DESTINATION bin)
 install(PROGRAMS
   tools/ceph-monstore-update-crush.sh
-  DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/ceph)
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/ceph)
 
 add_executable(ceph-objectstore-tool
   tools/ceph_objectstore_tool.cc
@@ -693,9 +674,6 @@ target_link_libraries(librados-config librados global ${BLKID_LIBRARIES}
   ${CMAKE_DL_LIBS})
 
 install(TARGETS rados librados-config DESTINATION bin)
-
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/src/pybind/
-  DESTINATION ${PYTHON_INSTDIR})
 
 # virtualenv base directory for ceph-disk and ceph-detect-init
 set(CEPH_BUILD_VIRTUALENV $ENV{TMPDIR})
@@ -1111,7 +1089,6 @@ install(PROGRAMS
   ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ceph-post-file
   ${CMAKE_SOURCE_DIR}/src/ceph-run
   ${CMAKE_SOURCE_DIR}/src/ceph-rest-api
-  ${CMAKE_SOURCE_DIR}/src/vstart.sh
   ${CMAKE_SOURCE_DIR}/src/ceph-clsinfo
   DESTINATION bin)
 install(PROGRAMS
@@ -1124,10 +1101,6 @@ install(FILES
   ${CMAKE_SOURCE_DIR}/share/id_dsa_drop.ceph.com.pub
   ${CMAKE_SOURCE_DIR}/share/known_hosts_drop.ceph.com
   DESTINATION ${CMAKE_INSTALL_DATADIR}/ceph)
-
-install(FILES
-  ${CMAKE_SOURCE_DIR}/doc/start/ceph.conf
-  DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}/ceph/ RENAME ceph.conf.example)
 
 install(PROGRAMS
   ceph_common.sh
@@ -1343,7 +1316,7 @@ if(${WITH_KVS})
     key_value_store/cls_kvs.cc)
   add_library(cls_kvs SHARED ${kvs_srcs})
   set_target_properties(cls_kvs PROPERTIES VERSION "1.0.0" SOVERSION "1")
-  install(TARGETS cls_kvs DESTINATION lib/rados-classes)
+  install(TARGETS cls_kvs DESTINATION ${CMAKE_INSTALL_LIBDIR}/rados-classes)
 endif(${WITH_KVS})
 
 if(${WITH_RADOSGW})
@@ -1476,7 +1449,7 @@ if(${WITH_RADOSGW})
   set_target_properties(rgw PROPERTIES OUTPUT_NAME rgw VERSION 2.0.0
     SOVERSION 1)
 
-  install(TARGETS rgw DESTINATION lib)
+  install(TARGETS rgw DESTINATION ${CMAKE_INSTALL_LIBDIR})
   install(FILES
     include/rados/librgw.h
     include/rados/rgw_file.h

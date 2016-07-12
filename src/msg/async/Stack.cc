@@ -30,9 +30,8 @@ void NetworkStack::add_thread(unsigned i, std::function<void ()> &thread)
   Worker *w = workers[i];
   thread = std::move(
     [this, w]() {
-      const uint64_t InitEventNumber = 5000;
       const uint64_t EventMaxWaitUs = 30000000;
-      w->center.init(InitEventNumber, w->id);
+      w->center.set_owner();
       ldout(cct, 10) << __func__ << " starting" << dendl;
       w->initialize();
       w->init_done();
@@ -68,8 +67,10 @@ Worker* NetworkStack::create_worker(CephContext *c, const string &type, unsigned
 
 NetworkStack::NetworkStack(CephContext *c, const string &t): type(t), cct(c)
 {
+  const uint64_t InitEventNumber = 5000;
   for (unsigned i = 0; i < cct->_conf->ms_async_max_op_threads; ++i) {
     Worker *w = create_worker(cct, type, i);
+    w->center.init(InitEventNumber, i);
     workers.push_back(w);
   }
   num_workers = cct->_conf->ms_async_op_threads;

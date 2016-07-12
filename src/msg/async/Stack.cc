@@ -73,6 +73,7 @@ NetworkStack::NetworkStack(CephContext *c, const string &t): type(t), cct(c)
     workers.push_back(w);
   }
   num_workers = cct->_conf->ms_async_op_threads;
+  cct->register_fork_watcher(this);
 }
 
 void NetworkStack::start()

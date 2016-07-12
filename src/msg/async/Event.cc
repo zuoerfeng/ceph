@@ -106,18 +106,6 @@ int EventCenter::init(int n, unsigned i)
 
   file_events.resize(n);
   nevent = n;
-
-  cct->lookup_or_create_singleton_object<EventCenter::AssociatedCenters>(
-      global_centers, "AsyncMessenger::EventCenter::global_center");
-  assert(global_centers && !global_centers->centers[idx]);
-  global_centers->centers[idx] = this;
-  owner = pthread_self();
-  ldout(cct, 1) << __func__ << " idx=" << idx << " owner=" << owner << dendl;
-
-  notify_handler = new C_handle_notify(this, cct);
-  r = create_file_event(notify_receive_fd, EVENT_READABLE, notify_handler);
-  assert(r == 0);
-
   return 0;
 }
 
@@ -142,6 +130,21 @@ EventCenter::~EventCenter()
   delete driver;
   if (notify_handler)
     delete notify_handler;
+}
+
+
+void EventCenter::set_owner()
+{
+  cct->lookup_or_create_singleton_object<EventCenter::AssociatedCenters>(
+      global_centers, "AsyncMessenger::EventCenter::global_center");
+  assert(global_centers && !global_centers->centers[idx]);
+  global_centers->centers[idx] = this;
+  owner = pthread_self();
+  ldout(cct, 1) << __func__ << " idx=" << idx << " owner=" << owner << dendl;
+
+  notify_handler = new C_handle_notify(this, cct);
+  int r = create_file_event(notify_receive_fd, EVENT_READABLE, notify_handler);
+  assert(r == 0);
 }
 
 int EventCenter::create_file_event(int fd, int mask, EventCallbackRef ctxt)

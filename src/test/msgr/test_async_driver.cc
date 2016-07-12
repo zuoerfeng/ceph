@@ -256,6 +256,7 @@ TEST(EventCenterTest, FileEventExpansion) {
   vector<int> sds;
   EventCenter center(g_ceph_context);
   center.init(100, 0);
+  center.set_owner();
   EventCallbackRef e(new FakeEvent());
   for (int i = 0; i < 300; i++) {
     int sd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -282,6 +283,7 @@ class Worker : public Thread {
     center.wakeup();
   }
   void* entry() {
+    center.set_owner();
     while (!done)
       center.process_events(1000000);
     return 0;

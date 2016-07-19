@@ -835,7 +835,6 @@ class SyntheticDispatcher : public Dispatcher {
       return ;
     }
 
-    Mutex::Locker l(lock);
     uint64_t i;
     bool reply;
     assert(m->get_middle().length());
@@ -845,7 +844,9 @@ class SyntheticDispatcher : public Dispatcher {
     if (reply) {
       lderr(g_ceph_context) << __func__ << " conn=" << m->get_connection() << " reply=" << reply << " i=" << i << dendl;
       reply_message(m, i);
-    } else if (sent.count(i)) {
+    }
+    Mutex::Locker l(lock);
+    if (!reply && sent.count(i)) {
       lderr(g_ceph_context) << __func__ << " conn=" << m->get_connection() << " reply=" << reply << " i=" << i << dendl;
       ASSERT_EQ(conn_sent[m->get_connection()].front(), i);
       ASSERT_TRUE(m->get_data().contents_equal(sent[i]));

@@ -309,7 +309,7 @@ class NetworkStack : public CephContext::ForkWatcher {
   Worker *get_worker(unsigned i) {
     return workers[i];
   }
-  void barrier();
+  void drain();
   unsigned get_num_worker() const {
     return num_workers;
   }

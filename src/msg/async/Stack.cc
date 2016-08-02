@@ -160,38 +160,38 @@ void NetworkStack::stop()
   simple_spin_unlock(&pool_spin);
 }
 
-class C_barrier : public EventCallback {
-  Mutex barrier_lock;
-  Cond barrier_cond;
-  std::atomic<int> barrier_count;
+class C_drain : public EventCallback {
+  Mutex drain_lock;
+  Cond drain_cond;
+  std::atomic<int> drain_count;
 
  public:
-  explicit C_barrier(size_t c)
-      : barrier_lock("C_barrier::barrier_lock"),
-        barrier_count(c) {}
+  explicit C_drain(size_t c)
+      : drain_lock("C_drain::drain_lock"),
+        drain_count(c) {}
   void do_request(int id) {
-    Mutex::Locker l(barrier_lock);
-    barrier_count--;
-    barrier_cond.Signal();
+    Mutex::Locker l(drain_lock);
+    drain_count--;
+    drain_cond.Signal();
   }
   void wait() {
-    Mutex::Locker l(barrier_lock);
-    while (barrier_count.load())
-      barrier_cond.Wait(barrier_lock);
+    Mutex::Locker l(drain_lock);
+    while (drain_count.load())
+      drain_cond.Wait(drain_lock);
   }
 };
 
-void NetworkStack::barrier()
+void NetworkStack::drain()
 {
   ldout(cct, 10) << __func__ << " started." << dendl;
   pthread_t cur = pthread_self();
   simple_spin_lock(&pool_spin);
-  C_barrier barrier(num_workers);
+  C_drain drain(num_workers);
   for (unsigned i = 0; i < num_workers; ++i) {
     assert(cur != workers[i]->center.get_owner());
-    workers[i]->center.dispatch_event_external(EventCallbackRef(&barrier));
+    workers[i]->center.dispatch_event_external(EventCallbackRef(&drain));
   }
   simple_spin_unlock(&pool_spin);
-  barrier.wait();
+  drain.wait();
   ldout(cct, 10) << __func__ << " end." << dendl;
 }

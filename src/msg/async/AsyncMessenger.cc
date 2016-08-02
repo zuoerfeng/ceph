@@ -323,7 +323,7 @@ int AsyncMessenger::shutdown()
   stop_cond.Signal();
   stopped = true;
   lock.Unlock();
-  stack->barrier();
+  stack->drain();
   return 0;
 }
 
@@ -422,7 +422,7 @@ void AsyncMessenger::wait()
 
   // close all connections
   shutdown_connections(false);
-  stack->barrier();
+  stack->drain();
 
   ldout(cct, 10) << __func__ << ": done." << dendl;
   ldout(cct, 1) << __func__ << " complete." << dendl;

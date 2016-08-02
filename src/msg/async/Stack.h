@@ -17,6 +17,7 @@
 #ifndef CEPH_MSG_ASYNC_STACK_H
 #define CEPH_MSG_ASYNC_STACK_H
 
+#include "include/Spinlock.h"
 #include "common/perf_counters.h"
 #include "common/simple_spin.h"
 #include "msg/msg_types.h"
@@ -272,7 +273,7 @@ class NetworkStack : public CephContext::ForkWatcher {
   std::string type;
   unsigned num_workers = 0;
   bool started = false;
-  simple_spinlock_t pool_spin = SIMPLE_SPINLOCK_INITIALIZER;
+  Spinlock pool_spin;
 
   void add_thread(unsigned i, std::function<void ()> &ts);
 

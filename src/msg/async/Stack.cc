@@ -79,9 +79,9 @@ NetworkStack::NetworkStack(CephContext *c, const string &t): type(t), started(fa
 
 void NetworkStack::start()
 {
-  simple_spin_lock(&pool_spin);
+  pool_spin.lock();
   if (started) {
-    simple_spin_unlock(&pool_spin);
+    pool_spin.unlock();
     return ;
   }
   for (unsigned i = 0; i < num_workers; ++i) {
@@ -92,7 +92,7 @@ void NetworkStack::start()
     spawn_worker(i, std::move(thread));
   }
   started = true;
-  simple_spin_unlock(&pool_spin);
+  pool_spin.unlock();
 
   for (unsigned i = 0; i < num_workers; ++i)
     workers[i]->wait_for_init();
@@ -106,7 +106,7 @@ Worker* NetworkStack::get_worker()
   unsigned min_load = std::numeric_limits<int>::max();
   Worker* current_best = nullptr;
 
-  simple_spin_lock(&pool_spin);
+  pool_spin.lock();
   // find worker with least references
   // tempting case is returning on references == 0, but in reality
   // this will happen so rarely that there's no need for special case.
@@ -141,7 +141,7 @@ Worker* NetworkStack::get_worker()
   //   ldout(cct, 20) << __func__ << " picked " << current_best 
   //                  << " as best worker with load " << min_load << dendl;
   // }
-  simple_spin_unlock(&pool_spin);
+  pool_spin.unlock();
 
   assert(current_best);
   ++current_best->references;
@@ -150,14 +150,13 @@ Worker* NetworkStack::get_worker()
 
 void NetworkStack::stop()
 {
-  simple_spin_lock(&pool_spin);
+  Spinlock::Locker l(pool_spin);
   for (unsigned i = 0; i < num_workers; ++i) {
     workers[i]->done = true;
     workers[i]->center.wakeup();
     join_worker(i);
   }
   started = false;
-  simple_spin_unlock(&pool_spin);
 }
 
 class C_drain : public EventCallback {
@@ -185,13 +184,13 @@ void NetworkStack::drain()
 {
   ldout(cct, 10) << __func__ << " started." << dendl;
   pthread_t cur = pthread_self();
-  simple_spin_lock(&pool_spin);
+  pool_spin.lock();
   C_drain drain(num_workers);
   for (unsigned i = 0; i < num_workers; ++i) {
     assert(cur != workers[i]->center.get_owner());
     workers[i]->center.dispatch_event_external(EventCallbackRef(&drain));
   }
-  simple_spin_unlock(&pool_spin);
+  pool_spin.unlock();
   drain.wait();
   ldout(cct, 10) << __func__ << " end." << dendl;
 }

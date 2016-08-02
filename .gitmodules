@@ -33,3 +33,9 @@
 [submodule "src/isa-l"]
 	path = src/isa-l
 	url = https://github.com/ceph/isa-l
+[submodule "src/msg/async/src/dpdk"]
+	path = src/msg/async/src/dpdk
+	url = https://github.com/yuyuyu101/dpdk
+[submodule "src/dpdk"]
+	path = src/dpdk
+	url = https://github.com/yuyuyu101/dpdk

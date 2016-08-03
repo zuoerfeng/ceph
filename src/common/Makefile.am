@@ -291,7 +291,8 @@ noinst_HEADERS += \
 	common/align.h \
 	common/mutex_debug.h \
 	common/shunique_lock.h \
-	common/dns_resolve.h
+	common/dns_resolve.h \
+	common/deleter.h
 
 if ENABLE_XIO
 noinst_HEADERS += \

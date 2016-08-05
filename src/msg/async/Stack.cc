@@ -17,6 +17,9 @@
 #include "common/Cond.h"
 #include "common/errno.h"
 #include "PosixStack.h"
+#ifdef HAVE_DPDK
+#include "dpdk/DPDKStack.h"
+#endif
 
 #include "common/dout.h"
 #include "include/assert.h"
@@ -55,6 +58,10 @@ std::shared_ptr<NetworkStack> NetworkStack::create(CephContext *c, const string 
 {
   if (t == "posix")
     return std::make_shared<PosixNetworkStack>(c, t);
+#ifdef HAVE_DPDK
+  else if (t == "dpdk")
+    return std::make_shared<DPDKStack>(c, t);
+#endif
 
   return nullptr;
 }
@@ -63,6 +70,10 @@ Worker* NetworkStack::create_worker(CephContext *c, const string &type, unsigned
 {
   if (type == "posix")
     return new PosixWorker(c, i);
+#ifdef HAVE_DPDK
+  else if (type == "dpdk")
+    return new DPDKWorker(c, i);
+#endif
   return nullptr;
 }
 

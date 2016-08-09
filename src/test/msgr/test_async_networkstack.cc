@@ -453,7 +453,7 @@ TEST_P(NetworkWorkerTest, ComplexTest) {
         r = cli_socket.is_connected();
       }
       ASSERT_EQ(r, 1);
-      center->delete_file_event(cli_socket.fd(), EVENT_READABLE);
+      center->delete_file_event(cli_socket.fd(), EVENT_WRITABLE);
     }
 
     const size_t message_size = 10240;

@@ -122,6 +122,13 @@ add_executable(unittest_bluefs
 add_ceph_unittest(unittest_bluefs ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/unittest_bluefs)
 target_link_libraries(unittest_bluefs os global)
 
+# ceph_test_bluestore_wal
+add_executable(ceph_test_bluestore_wal
+  test_bluestore_wal.cc
+  )
+add_ceph_unittest(ceph_test_bluestore_wal ${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/ceph_test_bluestore_wal)
+target_link_libraries(ceph_test_bluestore_wal os global)
+
 # unittest_bluestore_types
 add_executable(unittest_bluestore_types
   test_bluestore_types.cc

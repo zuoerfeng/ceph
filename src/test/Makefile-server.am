@@ -71,6 +71,14 @@ unittest_bluefs_LDADD = $(LIBOS) $(UNITTEST_LDADD) $(CEPH_GLOBAL)
 unittest_bluefs_CXXFLAGS = $(UNITTEST_CXXFLAGS)
 check_TESTPROGRAMS += unittest_bluefs
 
+ceph_test_bluestore_wal_SOURCES = test/objectstore/test_bluestore_wal.cc
+ceph_test_bluestore_wal_LDADD = $(LIBOS) $(UNITTEST_LDADD) $(CEPH_GLOBAL)
+ceph_test_bluestore_wal_CXXFLAGS = $(UNITTEST_CXXFLAGS) -I rocksdb/include
+if WITH_SLIBROCKSDB
+ceph_test_bluestore_wal_CXXFLAGS += -I rocksdb/include
+endif
+bin_DEBUGPROGRAMS += ceph_test_bluestore_wal
+
 unittest_bit_alloc_SOURCES = test/objectstore/BitAllocator_test.cc
 unittest_bit_alloc_LDADD = $(LIBOS) $(UNITTEST_LDADD) $(CEPH_GLOBAL)
 unittest_bit_alloc_CXXFLAGS = $(UNITTEST_CXXFLAGS)

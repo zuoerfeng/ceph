@@ -292,7 +292,7 @@ set(CMAKE_REQUIRED_LIBRARIES ${CURL_LIBRARIES})
 CHECK_SYMBOL_EXISTS(curl_multi_wait curl/curl.h HAVE_CURL_MULTI_WAIT)
 
 # nss or cryptopp?
-option(WITH_NSS "Use NSS crypto and SSL implementations" ON)
+option(WITH_NSS "Use NSS crypto and SSL implementations" OFF)
 if (${WITH_NSS})
   find_package(NSS REQUIRED)
     set(USE_NSS 1)
@@ -323,9 +323,9 @@ if(WITH_XIO)
 set(HAVE_XIO ${XIO_FOUND})
 endif(WITH_XIO)
 
-option(WITH_DPDK "Enable DPDK messaging" OFF)
+option(WITH_DPDK "Enable DPDK messaging" ON)
 if(WITH_DPDK)
-find_package(dpdk)
+find_package(dpdk REQUIRED)
 set(HAVE_DPDK ${DPDK_FOUND})
 endif(WITH_DPDK)
 
